@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
 func TestLoggerLogsRequest(t *testing.T) {
@@ -50,7 +49,7 @@ func TestLoggerLogsRequest(t *testing.T) {
 			// паттерн попадает в RouteContext только при матчинге маршрута.
 			r := chi.NewRouter()
 			r.Use(Logger(logger))
-			r.Use(chimw.Recoverer)
+			r.Use(Recoverer(slog.New(slog.DiscardHandler)))
 			r.Get("/api/v1/avatars/{id}", tt.handler)
 
 			rec := httptest.NewRecorder()
@@ -61,8 +60,8 @@ func TestLoggerLogsRequest(t *testing.T) {
 			if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
 				t.Fatalf("parse log line %q: %v", buf.String(), err)
 			}
-			if entry["http_status_code"] != tt.wantStatus {
-				t.Errorf("http_status_code = %v, want %v", entry["http_status_code"], tt.wantStatus)
+			if entry["status"] != tt.wantStatus {
+				t.Errorf("status = %v, want %v", entry["status"], tt.wantStatus)
 			}
 			if entry["method"] != http.MethodGet {
 				t.Errorf("method = %v, want %s", entry["method"], http.MethodGet)

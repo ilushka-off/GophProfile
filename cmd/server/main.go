@@ -25,9 +25,6 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
-// webDir — каталог со статикой веб-интерфейса, отдаётся по /web/.
-const webDir = "web/static"
-
 func main() {
 	if err := run(); err != nil {
 		slog.Error("server stopped", "err", err)
@@ -59,7 +56,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           handlers.NewRouter(logger, handlers.NewHealthHandler(pool, logger), webDir),
+		Handler:           handlers.NewRouter(logger, handlers.NewHealthHandler(pool, cfg.Broker.Kind, logger)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

@@ -35,7 +35,7 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 				"method", r.Method,
 				"route", route,
 				"path", r.URL.Path,
-				"http_status_code", status,
+				"status", status,
 				"bytes", ww.BytesWritten(),
 				"duration_ms", time.Since(start).Milliseconds(),
 			)

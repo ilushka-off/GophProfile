@@ -11,21 +11,30 @@ import (
 
 // writeServiceError переводит ошибку сервиса в HTTP-ответ. Это граница, где
 // ошибка логируется ровно один раз — и только 500, потому что 4xx не ошибка сервера.
-func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
+// Текст err клиенту не уходит: в обёрнутой ошибке видна внутренняя цепочка вызовов.
+// maxUploadSize нужен для ответа 413.
+func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error, maxUploadSize int64) {
 	var verr *domain.ValidationError
 	switch {
 	case errors.As(err, &verr):
-		httpx.WriteError(w, http.StatusBadRequest, msgValidation, verr.Details)
-	case errors.Is(err, domain.ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, msgNotFound, err.Error())
-	case errors.Is(err, domain.ErrForbidden):
-		httpx.WriteError(w, http.StatusForbidden, msgForbidden, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, verr.Details)
 	case errors.Is(err, domain.ErrInvalidFormat):
-		httpx.WriteError(w, http.StatusUnsupportedMediaType, msgInvalidFormat, err.Error())
+		httpx.WriteError(w, http.StatusBadRequest, msgInvalidFormat, detailsInvalidFormat)
+	case errors.Is(err, domain.ErrForbidden):
+		httpx.WriteError(w, http.StatusForbidden, msgForbidden, detailsForbidden)
+	case errors.Is(err, domain.ErrNotFound):
+		httpx.WriteError(w, http.StatusNotFound, msgNotFound, "")
 	case errors.Is(err, domain.ErrTooLarge):
-		httpx.WriteError(w, http.StatusRequestEntityTooLarge, msgTooLarge, err.Error())
+		writeTooLarge(w, maxUploadSize)
 	default:
 		logger.ErrorContext(r.Context(), "unhandled service error", "method", r.Method, "path", r.URL.Path, "err", err)
 		httpx.WriteError(w, http.StatusInternalServerError, msgInternal, "")
 	}
+}
+
+// writeTooLarge пишет 413 в формате ТЗ: {"error":"File too large","max_size":N}.
+// Вынесен отдельно, потому что лимит обычно срабатывает ещё в хендлере
+// (http.MaxBytesReader), до вызова сервиса.
+func writeTooLarge(w http.ResponseWriter, maxUploadSize int64) {
+	httpx.WriteJSON(w, http.StatusRequestEntityTooLarge, httpx.ErrorResponse{Error: msgTooLarge, MaxSize: maxUploadSize})
 }

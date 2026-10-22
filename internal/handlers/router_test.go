@@ -3,19 +3,13 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // Логика /health проверяется в health_test.go, здесь — только что маршруты подключены.
 func TestRouter(t *testing.T) {
-	webDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<h1>avatars</h1>"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	router := NewRouter(discardLogger(), NewHealthHandler(fakePinger{}, discardLogger()), webDir)
+	router := NewRouter(discardLogger(), NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()))
 
 	tests := []struct {
 		name       string
@@ -25,10 +19,8 @@ func TestRouter(t *testing.T) {
 		wantBody   string
 	}{
 		{"health is routed", http.MethodGet, "/health", http.StatusOK, `"status":"ok"`},
-		{"web redirects to slash", http.MethodGet, "/web", http.StatusMovedPermanently, ""},
-		{"web serves index", http.MethodGet, "/web/", http.StatusOK, "<h1>avatars</h1>"},
-		{"unknown route is json 404", http.MethodGet, "/api/v1/nope", http.StatusNotFound, `"error":"not found"`},
-		{"wrong method is json 405", http.MethodPost, "/health", http.StatusMethodNotAllowed, `"error":"method not allowed"`},
+		{"unknown route is json 404", http.MethodGet, "/api/v1/nope", http.StatusNotFound, `{"error":"Not found"}`},
+		{"wrong method is json 405", http.MethodPost, "/health", http.StatusMethodNotAllowed, `{"error":"Method not allowed"}`},
 	}
 
 	for _, tt := range tests {

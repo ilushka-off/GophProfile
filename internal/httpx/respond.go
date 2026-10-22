@@ -10,9 +10,11 @@ import (
 )
 
 // ErrorResponse — единый формат ошибки API: {"error": "...", "details": "..."}.
+// Для 413 вместо details передаётся max_size — лимит размера файла в байтах.
 type ErrorResponse struct {
 	Error   string `json:"error"`
-	Details string `json:"details"`
+	Details string `json:"details,omitempty"`
+	MaxSize int64  `json:"max_size,omitempty"`
 }
 
 // WriteJSON пишет v как JSON с указанным статусом.
@@ -25,6 +27,7 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // WriteError пишет ошибку в едином формате {"error": msg, "details": details}.
+// Пустой details в ответ не попадает.
 func WriteError(w http.ResponseWriter, status int, msg, details string) {
 	WriteJSON(w, status, ErrorResponse{Error: msg, Details: details})
 }
