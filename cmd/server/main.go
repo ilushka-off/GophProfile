@@ -12,14 +12,21 @@ import (
 	"time"
 
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/repository/postgres"
 )
 
 // Таймауты HTTP-сервера и корректного завершения.
 const (
 	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 30 * time.Second
+	writeTimeout      = 30 * time.Second
+	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
+
+// webDir — каталог со статикой веб-интерфейса, отдаётся по /web/.
+const webDir = "web/static"
 
 func main() {
 	if err := run(); err != nil {
@@ -50,15 +57,13 @@ func run() error {
 	}
 	defer pool.Close()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Avatar Service is running!")
-	})
-
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           mux,
+		Handler:           handlers.NewRouter(logger, handlers.NewHealthHandler(pool, logger), webDir),
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 
 	errCh := make(chan error, 1)
