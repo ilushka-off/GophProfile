@@ -28,7 +28,15 @@ func NewAvatarRepository(pool *pgxpool.Pool) *AvatarRepository {
 }
 
 // Create вставляет аватарку и заполняет в ней id, created_at и updated_at, выданные базой.
+// Пустые статусы заменяются умолчаниями uploading и pending, как в схеме таблицы.
 func (r *AvatarRepository) Create(ctx context.Context, a *domain.Avatar) error {
+	if a.UploadStatus == "" {
+		a.UploadStatus = domain.UploadStatusUploading
+	}
+	if a.ProcessingStatus == "" {
+		a.ProcessingStatus = domain.ProcessingStatusPending
+	}
+
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO avatars (user_id, file_name, mime_type, size_bytes, width, height, s3_key,
 			thumbnail_s3_keys, upload_status, processing_status)

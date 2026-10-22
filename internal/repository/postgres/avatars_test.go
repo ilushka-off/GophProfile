@@ -83,6 +83,29 @@ func TestAvatarRepositoryCreateAndGet(t *testing.T) {
 	}
 }
 
+func TestAvatarRepositoryCreateDefaultStatuses(t *testing.T) {
+	repo := NewAvatarRepository(testPool(t))
+	ctx := context.Background()
+
+	a := newTestAvatar("user-42")
+	a.UploadStatus = ""
+	a.ProcessingStatus = ""
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("get by id: %v", err)
+	}
+	if got.UploadStatus != domain.UploadStatusUploading {
+		t.Errorf("upload status = %q, want %q", got.UploadStatus, domain.UploadStatusUploading)
+	}
+	if got.ProcessingStatus != domain.ProcessingStatusPending {
+		t.Errorf("processing status = %q, want %q", got.ProcessingStatus, domain.ProcessingStatusPending)
+	}
+}
+
 func TestAvatarRepositoryGetByIDNotFound(t *testing.T) {
 	repo := NewAvatarRepository(testPool(t))
 

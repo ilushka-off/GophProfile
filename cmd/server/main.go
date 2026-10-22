@@ -14,6 +14,7 @@ import (
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/storage/s3"
 )
 
 // Таймауты HTTP-сервера и корректного завершения.
@@ -24,6 +25,10 @@ const (
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
+
+// storageInitTimeout ограничивает проверку и создание бакета при старте,
+// чтобы недоступный S3 не подвешивал запуск.
+const storageInitTimeout = 10 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -53,6 +58,16 @@ func run() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer pool.Close()
+
+	storage, err := s3.New(cfg.S3)
+	if err != nil {
+		return fmt.Errorf("create storage: %w", err)
+	}
+	initCtx, cancelInit := context.WithTimeout(ctx, storageInitTimeout)
+	defer cancelInit()
+	if err := storage.EnsureBucket(initCtx); err != nil {
+		return fmt.Errorf("ensure bucket: %w", err)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
