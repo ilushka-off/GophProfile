@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/services"
 	"go-avatar-service/internal/storage/s3"
 )
 
@@ -69,9 +71,20 @@ func run() error {
 		return fmt.Errorf("ensure bucket: %w", err)
 	}
 
+	// TODO: заменить на фабрику RabbitMQ/Kafka по BROKER, когда появятся реализации.
+	publisher := broker.NewLogPublisher(logger)
+	defer publisher.Close()
+
+	avatarService := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
+
+	router := handlers.NewRouter(logger,
+		handlers.NewHealthHandler(pool, cfg.Broker.Kind, logger),
+		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
+	)
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           handlers.NewRouter(logger, handlers.NewHealthHandler(pool, cfg.Broker.Kind, logger)),
+		Handler:           router,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

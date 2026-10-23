@@ -13,7 +13,7 @@ import (
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
 // /health и /web вне версии API и группу /api/v1 для эндпоинтов сервиса.
-func NewRouter(logger *slog.Logger, healthHandler *HealthHandler) http.Handler {
+func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler *AvatarHandler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
@@ -34,7 +34,7 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler) http.Handler {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Эндпоинты аватаров добавляются в следующих тикетах.
+		r.Post("/avatars", avatarHandler.Upload)
 	})
 
 	return r

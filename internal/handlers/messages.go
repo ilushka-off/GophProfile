@@ -11,6 +11,11 @@ const (
 
 	detailsInvalidFormat = "Supported formats: jpeg, png, webp"
 	detailsForbidden     = "You can only delete your own avatars"
+
+	detailsUserIDRequired = "X-User-ID header is required"
+	detailsUserIDTooLong  = "X-User-ID must be at most 255 characters"
+	detailsFileRequired   = "file is required"
+	detailsNotMultipart   = "request body must be multipart/form-data"
 )
 
 // Тексты ответов роутера на неизвестный маршрут и метод — в ТЗ их нет.

@@ -243,3 +243,23 @@ func TestAvatarRepositoryEmptyUser(t *testing.T) {
 		t.Errorf("list has %d items, want 0", len(list))
 	}
 }
+
+func TestAvatarRepositoryCreateWithID(t *testing.T) {
+	pool := testPool(t)
+	repo := NewAvatarRepository(pool)
+	ctx := context.Background()
+
+	id := uuid.New()
+	a := newTestAvatar("user-42")
+	a.ID = id
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if a.ID != id {
+		t.Fatalf("id = %s, want preset %s", a.ID, id)
+	}
+
+	if _, err := repo.GetByID(ctx, id); err != nil {
+		t.Fatalf("get by preset id: %v", err)
+	}
+}

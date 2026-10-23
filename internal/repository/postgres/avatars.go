@@ -28,6 +28,7 @@ func NewAvatarRepository(pool *pgxpool.Pool) *AvatarRepository {
 }
 
 // Create вставляет аватарку и заполняет в ней id, created_at и updated_at, выданные базой.
+// Если id уже задан, используется он: сервису id нужен до вставки, чтобы построить ключ S3.
 // Пустые статусы заменяются умолчаниями uploading и pending, как в схеме таблицы.
 func (r *AvatarRepository) Create(ctx context.Context, a *domain.Avatar) error {
 	if a.UploadStatus == "" {
@@ -37,12 +38,17 @@ func (r *AvatarRepository) Create(ctx context.Context, a *domain.Avatar) error {
 		a.ProcessingStatus = domain.ProcessingStatusPending
 	}
 
+	var id *uuid.UUID
+	if a.ID != uuid.Nil {
+		id = &a.ID
+	}
+
 	err := r.pool.QueryRow(ctx, `
-		INSERT INTO avatars (user_id, file_name, mime_type, size_bytes, width, height, s3_key,
+		INSERT INTO avatars (id, user_id, file_name, mime_type, size_bytes, width, height, s3_key,
 			thumbnail_s3_keys, upload_status, processing_status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at`,
-		a.UserID, a.FileName, a.MimeType, a.SizeBytes, a.Width, a.Height, a.S3Key,
+		id, a.UserID, a.FileName, a.MimeType, a.SizeBytes, a.Width, a.Height, a.S3Key,
 		a.ThumbnailS3Keys, a.UploadStatus, a.ProcessingStatus,
 	).Scan(&a.ID, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
