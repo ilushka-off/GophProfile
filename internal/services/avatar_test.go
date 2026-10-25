@@ -31,11 +31,18 @@ type fakeRepo struct {
 	created          *domain.Avatar
 	byID             *domain.Avatar
 	gotID            uuid.UUID
+	gotUserID        string
 }
 
 func (f *fakeRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Avatar, error) {
 	*f.log = append(*f.log, "repo.GetByID")
 	f.gotID = id
+	return f.byID, f.err
+}
+
+func (f *fakeRepo) GetCurrentByUser(_ context.Context, userID string) (*domain.Avatar, error) {
+	*f.log = append(*f.log, "repo.GetCurrentByUser")
+	f.gotUserID = userID
 	return f.byID, f.err
 }
 
@@ -498,6 +505,39 @@ func TestAvatarServiceGetFileFormat(t *testing.T) {
 		}
 		if _, err := obj.Body.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
 			t.Errorf("read after close: err = %v, want %v", err, io.ErrClosedPipe)
+		}
+	})
+}
+
+func TestAvatarServiceGetCurrentFile(t *testing.T) {
+	id := uuid.New()
+
+	t.Run("looks up by user", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = &domain.Avatar{ID: id, MimeType: "image/jpeg", S3Key: domain.OriginalKey(id, "jpg")}
+		d.storage.obj, _ = objectOf([]byte("x"), "")
+
+		obj, err := d.svc.GetCurrentFile(context.Background(), "user-42", FileOptions{Size: domain.SizeOriginal})
+		if err != nil {
+			t.Fatalf("get current file: %v", err)
+		}
+		if d.repo.gotUserID != "user-42" || d.storage.downloadedKey != d.repo.byID.S3Key {
+			t.Errorf("looked up user %q and key %q", d.repo.gotUserID, d.storage.downloadedKey)
+		}
+		if obj.ContentType != "image/jpeg" {
+			t.Errorf("content type = %q, want image/jpeg", obj.ContentType)
+		}
+	})
+
+	t.Run("no avatars", func(t *testing.T) {
+		d := newDeps()
+		d.repo.err = domain.ErrNotFound
+
+		if _, err := d.svc.GetCurrentFile(context.Background(), "nobody", FileOptions{}); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("err = %v, want %v", err, domain.ErrNotFound)
+		}
+		if got := strings.Join(*d.log, ","); got != "repo.GetCurrentByUser" {
+			t.Errorf("calls = %s, want only repo.GetCurrentByUser", got)
 		}
 	})
 }

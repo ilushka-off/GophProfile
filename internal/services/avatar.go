@@ -150,6 +150,16 @@ func (s *AvatarService) GetFile(ctx context.Context, id uuid.UUID, opts FileOpti
 	return s.openFile(ctx, a, opts)
 }
 
+// GetCurrentFile — как GetFile, но для текущей аватарки пользователя:
+// последней загруженной неудалённой. Аватарок нет — domain.ErrNotFound.
+func (s *AvatarService) GetCurrentFile(ctx context.Context, userID string, opts FileOptions) (*domain.Object, error) {
+	a, err := s.repo.GetCurrentByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.openFile(ctx, a, opts)
+}
+
 // openFile выбирает ключ S3 по размеру и при необходимости конвертирует формат.
 // ContentType берётся из БД (или из формата миниатюр), а не из S3.
 func (s *AvatarService) openFile(ctx context.Context, a *domain.Avatar, opts FileOptions) (*domain.Object, error) {

@@ -27,11 +27,12 @@ type fakeAvatarService struct {
 	obj    *domain.Object
 	err    error
 
-	called   bool
-	gotInput services.UploadInput
-	gotBody  []byte
-	gotID    uuid.UUID
-	gotOpts  services.FileOptions
+	called    bool
+	gotInput  services.UploadInput
+	gotBody   []byte
+	gotID     uuid.UUID
+	gotUserID string
+	gotOpts   services.FileOptions
 }
 
 // closeTracker — тело объекта S3, которое запоминает, что его закрыли.
@@ -48,6 +49,13 @@ func (c *closeTracker) Close() error {
 func (f *fakeAvatarService) GetFile(_ context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error) {
 	f.called = true
 	f.gotID = id
+	f.gotOpts = opts
+	return f.obj, f.err
+}
+
+func (f *fakeAvatarService) GetCurrentFile(_ context.Context, userID string, opts services.FileOptions) (*domain.Object, error) {
+	f.called = true
+	f.gotUserID = userID
 	f.gotOpts = opts
 	return f.obj, f.err
 }
@@ -369,6 +377,7 @@ func TestAvatarHandlerGetInvalidQuery(t *testing.T) {
 		{"empty size", "/api/v1/avatars/" + uuid.NewString() + "?size=", sizeErr},
 		{"unknown format", "/api/v1/avatars/" + uuid.NewString() + "?format=gif", formatErr},
 		{"format as mime type", "/api/v1/avatars/" + uuid.NewString() + "?format=image/png", formatErr},
+		{"current avatar, unknown size", "/api/v1/users/user-42/avatar?size=big", sizeErr},
 		{
 			"uuid is checked before query",
 			"/api/v1/avatars/not-a-uuid?size=big",
@@ -410,5 +419,44 @@ func TestAvatarHandlerGetConvertedHasNoContentLength(t *testing.T) {
 	}
 	if rec.Body.String() != "webp bytes" {
 		t.Errorf("body = %q, want %q", rec.Body, "webp bytes")
+	}
+}
+
+func TestAvatarHandlerGetCurrent(t *testing.T) {
+	body := &closeTracker{Reader: strings.NewReader("jpeg bytes")}
+	svc := &fakeAvatarService{obj: &domain.Object{Body: body, Size: 10, ContentType: "image/jpeg"}}
+
+	rec := getAvatar(svc, "/api/v1/users/user-42/avatar?size=300x300")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body)
+	}
+	if svc.gotUserID != "user-42" {
+		t.Errorf("service got user %q, want user-42", svc.gotUserID)
+	}
+	if want := (services.FileOptions{Size: domain.ThumbnailSize300}); svc.gotOpts != want {
+		t.Errorf("options = %+v, want %+v", svc.gotOpts, want)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Errorf("Content-Type = %q, want image/jpeg", got)
+	}
+	if rec.Body.String() != "jpeg bytes" {
+		t.Errorf("body = %q, want %q", rec.Body, "jpeg bytes")
+	}
+	if !body.closed {
+		t.Error("object body was not closed")
+	}
+}
+
+func TestAvatarHandlerGetCurrentNotFound(t *testing.T) {
+	svc := &fakeAvatarService{err: domain.ErrNotFound}
+
+	rec := getAvatar(svc, "/api/v1/users/nobody/avatar")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"Avatar not found"}` {
+		t.Errorf("body = %s", got)
 	}
 }

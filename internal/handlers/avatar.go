@@ -23,6 +23,7 @@ const (
 	maxUserIDLength = 255
 
 	urlParamAvatarID = "avatar_id"
+	urlParamUserID   = "user_id"
 
 	queryParamSize   = "size"
 	queryParamFormat = "format"
@@ -54,6 +55,7 @@ var formatMimeTypes = map[string]string{
 type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
 	GetFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error)
+	GetCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*domain.Object, error)
 }
 
 // avatarResponse — модель Avatar из API: ответ на загрузку и элемент списка.
@@ -146,6 +148,18 @@ func (h *AvatarHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	obj, err := h.svc.GetFile(r.Context(), id, opts)
+	h.writeFile(w, r, obj, err)
+}
+
+// GetCurrent — GET /api/v1/users/{user_id}/avatar?size=&format=: как Get,
+// но для текущей аватарки пользователя.
+func (h *AvatarHandler) GetCurrent(w http.ResponseWriter, r *http.Request) {
+	opts, ok := parseFileOptions(w, r)
+	if !ok {
+		return
+	}
+
+	obj, err := h.svc.GetCurrentFile(r.Context(), chi.URLParam(r, urlParamUserID), opts)
 	h.writeFile(w, r, obj, err)
 }
 
