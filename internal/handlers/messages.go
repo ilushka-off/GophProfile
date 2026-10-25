@@ -16,7 +16,10 @@ const (
 	detailsUserIDTooLong   = "X-User-ID must be at most 255 characters"
 	detailsFileRequired    = "file is required"
 	detailsInvalidAvatarID = "avatar_id must be a valid UUID"
-	detailsNotMultipart    = "request body must be multipart/form-data"
+	detailsInvalidSize     = "size: allowed values 100x100, 300x300, original"
+	// В ТЗ текст есть только для size, для format — по аналогии.
+	detailsInvalidFormatParam = "format: allowed values jpeg, png, webp"
+	detailsNotMultipart       = "request body must be multipart/form-data"
 )
 
 // Тексты ответов роутера на неизвестный маршрут и метод — в ТЗ их нет.

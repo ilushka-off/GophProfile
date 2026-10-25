@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -336,32 +337,68 @@ func TestTruncateRunes(t *testing.T) {
 	}
 }
 
+// objectOf оборачивает данные в объект S3 и запоминает, закрыли ли его тело.
+func objectOf(data []byte, contentType string) (*domain.Object, *closeTracker) {
+	body := &closeTracker{Reader: bytes.NewReader(data)}
+	return &domain.Object{Body: body, Size: int64(len(data)), ContentType: contentType}, body
+}
+
+type closeTracker struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTracker) Close() error {
+	c.closed = true
+	return nil
+}
+
 func TestAvatarServiceGetFile(t *testing.T) {
 	id := uuid.New()
-	stored := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
+	thumbKey := domain.ThumbnailKey(id, domain.ThumbnailSize100)
+	original := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
+	withThumbs := &domain.Avatar{
+		ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png"),
+		ThumbnailS3Keys: map[string]string{domain.ThumbnailSize100: thumbKey},
+	}
 
-	t.Run("content type comes from the database", func(t *testing.T) {
-		d := newDeps()
-		d.repo.byID = stored
-		d.storage.obj = &domain.Object{Body: io.NopCloser(strings.NewReader("x")), Size: 1, ContentType: "binary/octet-stream"}
+	tests := []struct {
+		name     string
+		avatar   *domain.Avatar
+		size     string
+		wantKey  string
+		wantType string
+	}{
+		{"original, content type comes from the database", original, domain.SizeOriginal, original.S3Key, "image/png"},
+		{"thumbnail not ready falls back to original", original, domain.ThumbnailSize100, original.S3Key, "image/png"},
+		{"ready thumbnail", withThumbs, domain.ThumbnailSize100, thumbKey, "image/jpeg"},
+		{"other thumbnail not ready", withThumbs, domain.ThumbnailSize300, withThumbs.S3Key, "image/png"},
+	}
 
-		obj, err := d.svc.GetFile(context.Background(), id)
-		if err != nil {
-			t.Fatalf("get file: %v", err)
-		}
-		if obj.ContentType != "image/png" {
-			t.Errorf("content type = %q, want image/png", obj.ContentType)
-		}
-		if d.repo.gotID != id || d.storage.downloadedKey != stored.S3Key {
-			t.Errorf("looked up id %s and key %q, want %s and %q", d.repo.gotID, d.storage.downloadedKey, id, stored.S3Key)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newDeps()
+			d.repo.byID = tt.avatar
+			d.storage.obj, _ = objectOf([]byte("x"), "binary/octet-stream")
+
+			obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: tt.size})
+			if err != nil {
+				t.Fatalf("get file: %v", err)
+			}
+			if d.repo.gotID != id || d.storage.downloadedKey != tt.wantKey {
+				t.Errorf("looked up id %s and key %q, want %s and %q", d.repo.gotID, d.storage.downloadedKey, id, tt.wantKey)
+			}
+			if obj.ContentType != tt.wantType || obj.Size != 1 {
+				t.Errorf("object type %q, size %d; want %q, 1", obj.ContentType, obj.Size, tt.wantType)
+			}
+		})
+	}
 
 	t.Run("not found skips s3", func(t *testing.T) {
 		d := newDeps()
 		d.repo.err = domain.ErrNotFound
 
-		if _, err := d.svc.GetFile(context.Background(), id); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("err = %v, want %v", err, domain.ErrNotFound)
 		}
 		if got := strings.Join(*d.log, ","); got != "repo.GetByID" {
@@ -371,11 +408,96 @@ func TestAvatarServiceGetFile(t *testing.T) {
 
 	t.Run("missing file in s3 is passed through", func(t *testing.T) {
 		d := newDeps()
-		d.repo.byID = stored
+		d.repo.byID = original
 		d.storage.downloadErr = domain.ErrObjectNotFound
 
-		if _, err := d.svc.GetFile(context.Background(), id); !errors.Is(err, domain.ErrObjectNotFound) {
+		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrObjectNotFound) {
 			t.Fatalf("err = %v, want %v", err, domain.ErrObjectNotFound)
+		}
+	})
+}
+
+func TestAvatarServiceGetFileFormat(t *testing.T) {
+	id := uuid.New()
+	pngData := encodePNG(t, 64, 48)
+	stored := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
+
+	t.Run("same format is streamed as is", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = stored
+		d.storage.obj, _ = objectOf(pngData, "image/png")
+
+		obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/png"})
+		if err != nil {
+			t.Fatalf("get file: %v", err)
+		}
+		if obj != d.storage.obj {
+			t.Error("object was re-encoded, want the one from s3")
+		}
+	})
+
+	for _, target := range []string{"image/jpeg", "image/webp"} {
+		t.Run("convert to "+target, func(t *testing.T) {
+			d := newDeps()
+			d.repo.byID = stored
+			var src *closeTracker
+			d.storage.obj, src = objectOf(pngData, "image/png")
+
+			obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: target})
+			if err != nil {
+				t.Fatalf("get file: %v", err)
+			}
+			defer obj.Body.Close()
+
+			if !src.closed {
+				t.Error("s3 body was not closed after decoding")
+			}
+			if obj.ContentType != target || obj.Size != -1 {
+				t.Errorf("object type %q, size %d; want %q, -1", obj.ContentType, obj.Size, target)
+			}
+			data, err := io.ReadAll(obj.Body)
+			if err != nil {
+				t.Fatalf("read converted: %v", err)
+			}
+			if got := http.DetectContentType(data); got != target {
+				t.Errorf("converted to %q, want %q", got, target)
+			}
+			cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+			if err != nil || cfg.Width != 64 || cfg.Height != 48 {
+				t.Errorf("converted image %dx%d, err %v; want 64x48", cfg.Width, cfg.Height, err)
+			}
+		})
+	}
+
+	t.Run("broken stored file", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = stored
+		var src *closeTracker
+		d.storage.obj, src = objectOf([]byte("\x89PNG\r\n\x1a\nbroken"), "image/png")
+
+		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/jpeg"}); err == nil {
+			t.Fatal("expected decode error")
+		}
+		if !src.closed {
+			t.Error("s3 body was not closed")
+		}
+	})
+
+	t.Run("client stops reading", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = stored
+		d.storage.obj, _ = objectOf(encodePNG(t, 512, 512), "image/png")
+
+		obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/webp"})
+		if err != nil {
+			t.Fatalf("get file: %v", err)
+		}
+		// Кодировщик пишет в pipe: после Close его запись падает и горутина завершается.
+		if err := obj.Body.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
+		if _, err := obj.Body.Read(make([]byte, 1)); !errors.Is(err, io.ErrClosedPipe) {
+			t.Errorf("read after close: err = %v, want %v", err, io.ErrClosedPipe)
 		}
 	})
 }

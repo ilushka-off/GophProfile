@@ -31,6 +31,7 @@ type fakeAvatarService struct {
 	gotInput services.UploadInput
 	gotBody  []byte
 	gotID    uuid.UUID
+	gotOpts  services.FileOptions
 }
 
 // closeTracker — тело объекта S3, которое запоминает, что его закрыли.
@@ -44,9 +45,10 @@ func (c *closeTracker) Close() error {
 	return nil
 }
 
-func (f *fakeAvatarService) GetFile(_ context.Context, id uuid.UUID) (*domain.Object, error) {
+func (f *fakeAvatarService) GetFile(_ context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error) {
 	f.called = true
 	f.gotID = id
+	f.gotOpts = opts
 	return f.obj, f.err
 }
 
@@ -322,5 +324,91 @@ func TestAvatarHandlerGetErrors(t *testing.T) {
 				t.Errorf("service called = %v, want %v", svc.called, tt.wantSvcCall)
 			}
 		})
+	}
+}
+
+func TestAvatarHandlerGetFileOptions(t *testing.T) {
+	id := uuid.New()
+	tests := []struct {
+		name  string
+		query string
+		want  services.FileOptions
+	}{
+		{"defaults", "", services.FileOptions{Size: domain.SizeOriginal}},
+		{"thumbnail", "?size=100x100", services.FileOptions{Size: domain.ThumbnailSize100}},
+		{"explicit original", "?size=original", services.FileOptions{Size: domain.SizeOriginal}},
+		{"format", "?format=webp", services.FileOptions{Size: domain.SizeOriginal, Format: "image/webp"}},
+		{"both", "?size=300x300&format=png", services.FileOptions{Size: domain.ThumbnailSize300, Format: "image/png"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{obj: &domain.Object{Body: io.NopCloser(strings.NewReader("x")), Size: 1, ContentType: "image/png"}}
+
+			rec := getAvatar(svc, "/api/v1/avatars/"+id.String()+tt.query)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body)
+			}
+			if svc.gotOpts != tt.want {
+				t.Errorf("options = %+v, want %+v", svc.gotOpts, tt.want)
+			}
+		})
+	}
+}
+
+func TestAvatarHandlerGetInvalidQuery(t *testing.T) {
+	sizeErr := `{"error":"Invalid request","details":"size: allowed values 100x100, 300x300, original"}`
+	formatErr := `{"error":"Invalid request","details":"format: allowed values jpeg, png, webp"}`
+	tests := []struct {
+		name     string
+		path     string
+		wantBody string
+	}{
+		{"unknown size", "/api/v1/avatars/" + uuid.NewString() + "?size=50x50", sizeErr},
+		{"empty size", "/api/v1/avatars/" + uuid.NewString() + "?size=", sizeErr},
+		{"unknown format", "/api/v1/avatars/" + uuid.NewString() + "?format=gif", formatErr},
+		{"format as mime type", "/api/v1/avatars/" + uuid.NewString() + "?format=image/png", formatErr},
+		{
+			"uuid is checked before query",
+			"/api/v1/avatars/not-a-uuid?size=big",
+			`{"error":"Invalid request","details":"avatar_id must be a valid UUID"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{}
+			rec := getAvatar(svc, tt.path)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != tt.wantBody {
+				t.Errorf("body = %s, want %s", got, tt.wantBody)
+			}
+			if svc.called {
+				t.Error("service was called")
+			}
+		})
+	}
+}
+
+func TestAvatarHandlerGetConvertedHasNoContentLength(t *testing.T) {
+	svc := &fakeAvatarService{obj: &domain.Object{Body: io.NopCloser(strings.NewReader("webp bytes")), Size: -1, ContentType: "image/webp"}}
+
+	rec := getAvatar(svc, "/api/v1/avatars/"+uuid.NewString()+"?format=webp")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "" {
+		t.Errorf("Content-Length = %q, want none", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/webp" {
+		t.Errorf("Content-Type = %q, want image/webp", got)
+	}
+	if rec.Body.String() != "webp bytes" {
+		t.Errorf("body = %q, want %q", rec.Body, "webp bytes")
 	}
 }

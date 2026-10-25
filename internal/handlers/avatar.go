@@ -24,6 +24,9 @@ const (
 
 	urlParamAvatarID = "avatar_id"
 
+	queryParamSize   = "size"
+	queryParamFormat = "format"
+
 	formFieldFile = "file"
 
 	// multipartOverhead — запас к лимиту файла на заголовки и границы multipart:
@@ -33,10 +36,24 @@ const (
 	multipartMemory = 1 << 20 // 1 MiB
 )
 
+// allowedSizes — допустимые значения query-параметра size.
+var allowedSizes = map[string]bool{
+	domain.ThumbnailSize100: true,
+	domain.ThumbnailSize300: true,
+	domain.SizeOriginal:     true,
+}
+
+// formatMimeTypes — допустимые значения query-параметра format и их MIME-типы.
+var formatMimeTypes = map[string]string{
+	"jpeg": "image/jpeg",
+	"png":  "image/png",
+	"webp": "image/webp",
+}
+
 // AvatarService — операции с аватарками, которые нужны хендлеру.
 type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
-	GetFile(ctx context.Context, id uuid.UUID) (*domain.Object, error)
+	GetFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error)
 }
 
 // avatarResponse — модель Avatar из API: ответ на загрузку и элемент списка.
@@ -116,15 +133,24 @@ func (h *AvatarHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, newAvatarResponse(avatar))
 }
 
-// Get — GET /api/v1/avatars/{avatar_id}: отдаёт оригинал картинки потоком,
+// Get — GET /api/v1/avatars/{avatar_id}?size=&format=: отдаёт картинку потоком,
 // не читая файл целиком в память.
 func (h *AvatarHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseAvatarID(w, r)
 	if !ok {
 		return
 	}
+	opts, ok := parseFileOptions(w, r)
+	if !ok {
+		return
+	}
 
-	obj, err := h.svc.GetFile(r.Context(), id)
+	obj, err := h.svc.GetFile(r.Context(), id, opts)
+	h.writeFile(w, r, obj, err)
+}
+
+// writeFile отдаёт картинку из сервиса или его ошибку.
+func (h *AvatarHandler) writeFile(w http.ResponseWriter, r *http.Request, obj *domain.Object, err error) {
 	if err != nil {
 		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
 		return
@@ -132,12 +158,39 @@ func (h *AvatarHandler) Get(w http.ResponseWriter, r *http.Request) {
 	defer obj.Body.Close()
 
 	w.Header().Set("Content-Type", obj.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
+	// При конвертации формата размер заранее неизвестен — ответ уйдёт chunked.
+	if obj.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
+	}
 	w.WriteHeader(http.StatusOK)
 	// Заголовки уже ушли, поменять статус нельзя — остаётся только записать в лог.
 	if _, err := io.Copy(w, obj.Body); err != nil {
-		h.logger.WarnContext(r.Context(), "stream avatar", "avatar_id", id, "err", err)
+		h.logger.WarnContext(r.Context(), "stream avatar", "path", r.URL.Path, "err", err)
 	}
+}
+
+// parseFileOptions разбирает query-параметры size и format. Параметр, который
+// передан с недопустимым значением (в том числе пустым), — 400 и false.
+func parseFileOptions(w http.ResponseWriter, r *http.Request) (services.FileOptions, bool) {
+	q := r.URL.Query()
+	opts := services.FileOptions{Size: domain.SizeOriginal}
+
+	if q.Has(queryParamSize) {
+		opts.Size = q.Get(queryParamSize)
+		if !allowedSizes[opts.Size] {
+			httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, detailsInvalidSize)
+			return services.FileOptions{}, false
+		}
+	}
+	if q.Has(queryParamFormat) {
+		mimeType, ok := formatMimeTypes[q.Get(queryParamFormat)]
+		if !ok {
+			httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, detailsInvalidFormatParam)
+			return services.FileOptions{}, false
+		}
+		opts.Format = mimeType
+	}
+	return opts, true
 }
 
 // parseAvatarID разбирает {avatar_id} из пути. Если это не UUID, пишет 400 и возвращает false.

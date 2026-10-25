@@ -6,16 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	_ "image/jpeg" // декодер для image.DecodeConfig
-	_ "image/png"  // декодер для image.DecodeConfig
+	_ "image/jpeg" // декодер для image.DecodeConfig и image.Decode
+	_ "image/png"  // декодер для image.DecodeConfig и image.Decode
 	"io"
 	"net/http"
 
 	"github.com/google/uuid"
-	_ "golang.org/x/image/webp" // декодер для image.DecodeConfig
+	_ "golang.org/x/image/webp" // декодер для image.DecodeConfig и image.Decode
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/domain"
+	"go-avatar-service/internal/imaging"
 )
 
 // sniffLen — сколько первых байт файла смотрит http.DetectContentType.
@@ -131,21 +132,61 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	return a, nil
 }
 
-// GetFile отдаёт оригинал аватарки потоком. ContentType берётся из mime_type в БД,
-// а не из S3. Удалённой или несуществующей аватарки нет — domain.ErrNotFound.
-// Body закрывает вызывающий.
-func (s *AvatarService) GetFile(ctx context.Context, id uuid.UUID) (*domain.Object, error) {
+// FileOptions — какую картинку отдать. Значения уже проверены хендлером.
+type FileOptions struct {
+	// Size — domain.ThumbnailSize100, domain.ThumbnailSize300 или domain.SizeOriginal.
+	Size string
+	// Format — MIME-тип ответа. Пусто — формат файла как есть.
+	Format string
+}
+
+// GetFile отдаёт картинку аватарки потоком. Удалённой или несуществующей
+// аватарки нет — domain.ErrNotFound. Body закрывает вызывающий.
+func (s *AvatarService) GetFile(ctx context.Context, id uuid.UUID, opts FileOptions) (*domain.Object, error) {
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	return s.openFile(ctx, a, opts)
+}
 
-	obj, err := s.storage.Download(ctx, a.S3Key)
+// openFile выбирает ключ S3 по размеру и при необходимости конвертирует формат.
+// ContentType берётся из БД (или из формата миниатюр), а не из S3.
+func (s *AvatarService) openFile(ctx context.Context, a *domain.Avatar, opts FileOptions) (*domain.Object, error) {
+	key, mimeType := a.S3Key, a.MimeType
+	// Миниатюры ещё нет — отдаём оригинал: клиент всегда получает картинку, а не ошибку.
+	if thumbKey, ok := a.ThumbnailS3Keys[opts.Size]; ok {
+		key, mimeType = thumbKey, domain.ThumbnailMimeType
+	}
+
+	obj, err := s.storage.Download(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	obj.ContentType = a.MimeType
-	return obj, nil
+	if opts.Format == "" || opts.Format == mimeType {
+		obj.ContentType = mimeType
+		return obj, nil
+	}
+	return convert(obj, opts.Format)
+}
+
+// convert перекодирует картинку в mimeType. Декодировать приходится целиком,
+// а кодирование идёт через pipe по мере того, как вызывающий читает Body,
+// поэтому размер заранее неизвестен (Size = -1). Если вызывающий закроет Body
+// раньше, запись в pipe вернёт ошибку и горутина завершится.
+func convert(obj *domain.Object, mimeType string) (*domain.Object, error) {
+	defer obj.Body.Close()
+
+	img, _, err := image.Decode(obj.Body)
+	if err != nil {
+		return nil, fmt.Errorf("decode for conversion to %s: %w", mimeType, err)
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		pw.CloseWithError(imaging.Encode(pw, img, mimeType))
+	}()
+	return &domain.Object{Body: pr, Size: -1, ContentType: mimeType}, nil
 }
 
 func (s *AvatarService) publishUploaded(ctx context.Context, a *domain.Avatar) error {
