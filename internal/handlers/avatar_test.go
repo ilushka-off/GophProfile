@@ -24,11 +24,30 @@ const testMaxUploadSize = 1 << 10 // 1 KiB, чтобы не гонять в те
 // fakeAvatarService запоминает, что пришло в Upload, и отвечает заданными avatar и err.
 type fakeAvatarService struct {
 	avatar *domain.Avatar
+	obj    *domain.Object
 	err    error
 
 	called   bool
 	gotInput services.UploadInput
 	gotBody  []byte
+	gotID    uuid.UUID
+}
+
+// closeTracker — тело объекта S3, которое запоминает, что его закрыли.
+type closeTracker struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTracker) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (f *fakeAvatarService) GetFile(_ context.Context, id uuid.UUID) (*domain.Object, error) {
+	f.called = true
+	f.gotID = id
+	return f.obj, f.err
 }
 
 func (f *fakeAvatarService) Upload(_ context.Context, in services.UploadInput) (*domain.Avatar, error) {
@@ -74,7 +93,7 @@ func TestAvatarHandlerUploadCreated(t *testing.T) {
 		ID:               id,
 		UserID:           "user-42",
 		ProcessingStatus: domain.ProcessingStatusPending,
-		CreatedAt:        time.Date(2026, 10, 6, 13, 0, 0, 0, time.FixedZone("MSK", 3*60*60)),
+		CreatedAt:        time.Date(2026, 10, 6, 13, 0, 0, 680919000, time.FixedZone("MSK", 3*60*60)),
 	}}
 	h := NewAvatarHandler(svc, testMaxUploadSize, discardLogger())
 
@@ -203,6 +222,95 @@ func TestAvatarHandlerUploadErrors(t *testing.T) {
 			body, ct := tt.body(t)
 			rec := httptest.NewRecorder()
 			h.Upload(rec, newUploadRequest(body, ct, tt.userID))
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != tt.wantBody {
+				t.Errorf("body = %s, want %s", got, tt.wantBody)
+			}
+			if svc.called != tt.wantSvcCall {
+				t.Errorf("service called = %v, want %v", svc.called, tt.wantSvcCall)
+			}
+		})
+	}
+}
+
+// getAvatar прогоняет GET через роутер, чтобы {avatar_id} разобрал chi.
+func getAvatar(svc *fakeAvatarService, path string) *httptest.ResponseRecorder {
+	router := NewRouter(discardLogger(),
+		NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()),
+		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
+	)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func TestAvatarHandlerGetStreamsFile(t *testing.T) {
+	id := uuid.MustParse("0b6c6c9e-5f0e-4a35-9a43-7f3b1c2d9e10")
+	body := &closeTracker{Reader: strings.NewReader("png bytes")}
+	svc := &fakeAvatarService{obj: &domain.Object{Body: body, Size: int64(len("png bytes")), ContentType: "image/png"}}
+
+	rec := getAvatar(svc, "/api/v1/avatars/"+id.String())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body %s", rec.Code, http.StatusOK, rec.Body)
+	}
+	if svc.gotID != id {
+		t.Errorf("service got id %s, want %s", svc.gotID, id)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "9" {
+		t.Errorf("Content-Length = %q, want 9", got)
+	}
+	if rec.Body.String() != "png bytes" {
+		t.Errorf("body = %q, want %q", rec.Body, "png bytes")
+	}
+	if !body.closed {
+		t.Error("object body was not closed")
+	}
+}
+
+func TestAvatarHandlerGetErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		svcErr      error
+		wantStatus  int
+		wantBody    string
+		wantSvcCall bool
+	}{
+		{
+			name:       "invalid uuid",
+			path:       "/api/v1/avatars/not-a-uuid",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   `{"error":"Invalid request","details":"avatar_id must be a valid UUID"}`,
+		},
+		{
+			name:        "not found or deleted",
+			path:        "/api/v1/avatars/" + uuid.NewString(),
+			svcErr:      domain.ErrNotFound,
+			wantStatus:  http.StatusNotFound,
+			wantBody:    `{"error":"Avatar not found"}`,
+			wantSvcCall: true,
+		},
+		{
+			name:        "row exists but file is missing in s3",
+			path:        "/api/v1/avatars/" + uuid.NewString(),
+			svcErr:      domain.ErrObjectNotFound,
+			wantStatus:  http.StatusInternalServerError,
+			wantBody:    `{"error":"Internal server error"}`,
+			wantSvcCall: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{err: tt.svcErr}
+			rec := getAvatar(svc, tt.path)
 
 			if rec.Code != tt.wantStatus {
 				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)

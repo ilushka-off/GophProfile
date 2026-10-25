@@ -28,6 +28,14 @@ type fakeRepo struct {
 	log              *calls
 	err              error
 	created          *domain.Avatar
+	byID             *domain.Avatar
+	gotID            uuid.UUID
+}
+
+func (f *fakeRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Avatar, error) {
+	*f.log = append(*f.log, "repo.GetByID")
+	f.gotID = id
+	return f.byID, f.err
 }
 
 func (f *fakeRepo) Create(_ context.Context, a *domain.Avatar) error {
@@ -49,6 +57,16 @@ type fakeStorage struct {
 	size        int64
 	contentType string
 	deleted     []string
+
+	obj           *domain.Object
+	downloadErr   error
+	downloadedKey string
+}
+
+func (f *fakeStorage) Download(_ context.Context, key string) (*domain.Object, error) {
+	*f.log = append(*f.log, "storage.Download")
+	f.downloadedKey = key
+	return f.obj, f.downloadErr
 }
 
 func (f *fakeStorage) Upload(_ context.Context, key string, r io.Reader, size int64, contentType string) error {
@@ -120,6 +138,14 @@ func encodeJPEG(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
+// webp64x48 — минимальный lossless WebP 64x48: в стандартной библиотеке нет
+// кодировщика WebP, а для DetectContentType и DecodeConfig хватает заголовка VP8L.
+func webp64x48(*testing.T) []byte {
+	return []byte("RIFF\x12\x00\x00\x00WEBP" +
+		"VP8L\x05\x00\x00\x00" +
+		"\x2f\x3f\xc0\x0b\x00\x00") // сигнатура, (w-1)|(h-1)<<14, байт выравнивания
+}
+
 func uploadInput(data []byte) UploadInput {
 	return UploadInput{
 		UserID:   "user-42",
@@ -138,6 +164,7 @@ func TestAvatarServiceUpload(t *testing.T) {
 	}{
 		{"png", func(t *testing.T) []byte { return encodePNG(t, 64, 48) }, "image/png", ".png"},
 		{"jpeg", func(t *testing.T) []byte { return encodeJPEG(t, 64, 48) }, "image/jpeg", ".jpg"},
+		{"webp", webp64x48, "image/webp", ".webp"},
 	}
 
 	for _, tt := range tests {
@@ -307,4 +334,48 @@ func TestTruncateRunes(t *testing.T) {
 	if got := truncateRunes("me.png", 255); got != "me.png" {
 		t.Errorf("truncateRunes = %q, want unchanged", got)
 	}
+}
+
+func TestAvatarServiceGetFile(t *testing.T) {
+	id := uuid.New()
+	stored := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
+
+	t.Run("content type comes from the database", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = stored
+		d.storage.obj = &domain.Object{Body: io.NopCloser(strings.NewReader("x")), Size: 1, ContentType: "binary/octet-stream"}
+
+		obj, err := d.svc.GetFile(context.Background(), id)
+		if err != nil {
+			t.Fatalf("get file: %v", err)
+		}
+		if obj.ContentType != "image/png" {
+			t.Errorf("content type = %q, want image/png", obj.ContentType)
+		}
+		if d.repo.gotID != id || d.storage.downloadedKey != stored.S3Key {
+			t.Errorf("looked up id %s and key %q, want %s and %q", d.repo.gotID, d.storage.downloadedKey, id, stored.S3Key)
+		}
+	})
+
+	t.Run("not found skips s3", func(t *testing.T) {
+		d := newDeps()
+		d.repo.err = domain.ErrNotFound
+
+		if _, err := d.svc.GetFile(context.Background(), id); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("err = %v, want %v", err, domain.ErrNotFound)
+		}
+		if got := strings.Join(*d.log, ","); got != "repo.GetByID" {
+			t.Errorf("calls = %s, want only repo.GetByID", got)
+		}
+	})
+
+	t.Run("missing file in s3 is passed through", func(t *testing.T) {
+		d := newDeps()
+		d.repo.byID = stored
+		d.storage.downloadErr = domain.ErrObjectNotFound
+
+		if _, err := d.svc.GetFile(context.Background(), id); !errors.Is(err, domain.ErrObjectNotFound) {
+			t.Fatalf("err = %v, want %v", err, domain.ErrObjectNotFound)
+		}
+	})
 }

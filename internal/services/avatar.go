@@ -131,6 +131,23 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	return a, nil
 }
 
+// GetFile отдаёт оригинал аватарки потоком. ContentType берётся из mime_type в БД,
+// а не из S3. Удалённой или несуществующей аватарки нет — domain.ErrNotFound.
+// Body закрывает вызывающий.
+func (s *AvatarService) GetFile(ctx context.Context, id uuid.UUID) (*domain.Object, error) {
+	a, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	obj, err := s.storage.Download(ctx, a.S3Key)
+	if err != nil {
+		return nil, err
+	}
+	obj.ContentType = a.MimeType
+	return obj, nil
+}
+
 func (s *AvatarService) publishUploaded(ctx context.Context, a *domain.Avatar) error {
 	body, err := json.Marshal(broker.AvatarUploadEvent{
 		AvatarID: a.ID.String(),
