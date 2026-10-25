@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,44 +142,91 @@ type FileOptions struct {
 	Format string
 }
 
-// GetFile отдаёт картинку аватарки потоком. Удалённой или несуществующей
-// аватарки нет — domain.ErrNotFound. Body закрывает вызывающий.
-func (s *AvatarService) GetFile(ctx context.Context, id uuid.UUID, opts FileOptions) (*domain.Object, error) {
+// File — картинка, которую отдаст Open. Всё, кроме самих байт, известно
+// до похода в S3, поэтому на совпавший ETag можно ответить 304, не скачивая
+// и не конвертируя файл.
+type File struct {
+	// ContentType — формат ответа: из БД, формат миниатюр или запрошенный format.
+	ContentType string
+	ETag        string
+	// Immutable — по этому URL всегда будет тот же файл, и его можно кешировать
+	// надолго. Это не так для текущей аватарки пользователя и для оригинала,
+	// отданного вместо неготовой миниатюры.
+	Immutable bool
+
+	key        string
+	sourceType string
+}
+
+// ResolveFile находит, какую картинку отдать по avatar_id. Удалённой или
+// несуществующей аватарки нет — domain.ErrNotFound.
+func (s *AvatarService) ResolveFile(ctx context.Context, id uuid.UUID, opts FileOptions) (*File, error) {
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return s.openFile(ctx, a, opts)
+	return resolveFile(a, opts, true), nil
 }
 
-// GetCurrentFile — как GetFile, но для текущей аватарки пользователя:
+// ResolveCurrentFile — как ResolveFile, но для текущей аватарки пользователя:
 // последней загруженной неудалённой. Аватарок нет — domain.ErrNotFound.
-func (s *AvatarService) GetCurrentFile(ctx context.Context, userID string, opts FileOptions) (*domain.Object, error) {
+func (s *AvatarService) ResolveCurrentFile(ctx context.Context, userID string, opts FileOptions) (*File, error) {
 	a, err := s.repo.GetCurrentByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	return s.openFile(ctx, a, opts)
+	// Текущая аватарка меняется после новой загрузки или удаления.
+	return resolveFile(a, opts, false), nil
 }
 
-// openFile выбирает ключ S3 по размеру и при необходимости конвертирует формат.
-// ContentType берётся из БД (или из формата миниатюр), а не из S3.
-func (s *AvatarService) openFile(ctx context.Context, a *domain.Avatar, opts FileOptions) (*domain.Object, error) {
-	key, mimeType := a.S3Key, a.MimeType
-	// Миниатюры ещё нет — отдаём оригинал: клиент всегда получает картинку, а не ошибку.
-	if thumbKey, ok := a.ThumbnailS3Keys[opts.Size]; ok {
-		key, mimeType = thumbKey, domain.ThumbnailMimeType
-	}
-
-	obj, err := s.storage.Download(ctx, key)
+// Open скачивает файл потоком и при необходимости конвертирует формат.
+// Body закрывает вызывающий.
+func (s *AvatarService) Open(ctx context.Context, f *File) (*domain.Object, error) {
+	obj, err := s.storage.Download(ctx, f.key)
 	if err != nil {
 		return nil, err
 	}
-	if opts.Format == "" || opts.Format == mimeType {
-		obj.ContentType = mimeType
+	if f.ContentType == f.sourceType {
+		obj.ContentType = f.ContentType
 		return obj, nil
 	}
-	return convert(obj, opts.Format)
+	return convert(obj, f.ContentType)
+}
+
+// resolveFile выбирает ключ S3 по размеру и формат ответа. ContentType берётся
+// из БД (или из формата миниатюр), а не из S3. stableURL — URL указывает
+// на конкретную аватарку, а не на «текущую».
+func resolveFile(a *domain.Avatar, opts FileOptions, stableURL bool) *File {
+	f := &File{key: a.S3Key, sourceType: a.MimeType, Immutable: stableURL}
+
+	thumbKey, ready := a.ThumbnailS3Keys[opts.Size]
+	switch {
+	case ready:
+		f.key, f.sourceType = thumbKey, domain.ThumbnailMimeType
+	case opts.Size == domain.ThumbnailSize100 || opts.Size == domain.ThumbnailSize300:
+		// Миниатюры ещё нет — отдаём оригинал: клиент всегда получает картинку,
+		// а не ошибку. Но после обработки по этому URL будет уже миниатюра.
+		f.Immutable = false
+	}
+
+	f.ContentType = f.sourceType
+	if opts.Format != "" {
+		f.ContentType = opts.Format
+	}
+	f.ETag = etag(f.key, f.ContentType, f.ContentType != f.sourceType)
+	return f
+}
+
+// etag считается от ключа S3 и формата ответа: файл по ключу не меняется.
+// У сконвертированной картинки ETag слабый: те же пиксели, но байты зависят
+// от настроек кодировщика.
+func etag(key, contentType string, converted bool) string {
+	sum := sha256.Sum256([]byte(key + "|" + contentType))
+	tag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	if converted {
+		return "W/" + tag
+	}
+	return tag
 }
 
 // convert перекодирует картинку в mimeType. Декодировать приходится целиком,

@@ -25,9 +25,13 @@ const testMaxUploadSize = 1 << 10 // 1 KiB, чтобы не гонять в те
 type fakeAvatarService struct {
 	avatar *domain.Avatar
 	obj    *domain.Object
+	file   *services.File
 	err    error
+	// openErr — ошибка Open: файл найден в БД, но не открылся.
+	openErr error
 
 	called    bool
+	opened    bool
 	gotInput  services.UploadInput
 	gotBody   []byte
 	gotID     uuid.UUID
@@ -46,18 +50,35 @@ func (c *closeTracker) Close() error {
 	return nil
 }
 
-func (f *fakeAvatarService) GetFile(_ context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error) {
+// resolved — что вернут ResolveFile и ResolveCurrentFile: file, если задан,
+// иначе неизменяемый файл с ETag "test".
+func (f *fakeAvatarService) resolved() (*services.File, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.file != nil {
+		return f.file, nil
+	}
+	return &services.File{ETag: `"test"`, Immutable: true}, nil
+}
+
+func (f *fakeAvatarService) ResolveFile(_ context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error) {
 	f.called = true
 	f.gotID = id
 	f.gotOpts = opts
-	return f.obj, f.err
+	return f.resolved()
 }
 
-func (f *fakeAvatarService) GetCurrentFile(_ context.Context, userID string, opts services.FileOptions) (*domain.Object, error) {
+func (f *fakeAvatarService) ResolveCurrentFile(_ context.Context, userID string, opts services.FileOptions) (*services.File, error) {
 	f.called = true
 	f.gotUserID = userID
 	f.gotOpts = opts
-	return f.obj, f.err
+	return f.resolved()
+}
+
+func (f *fakeAvatarService) Open(context.Context, *services.File) (*domain.Object, error) {
+	f.opened = true
+	return f.obj, f.openErr
 }
 
 func (f *fakeAvatarService) Upload(_ context.Context, in services.UploadInput) (*domain.Avatar, error) {
@@ -458,5 +479,130 @@ func TestAvatarHandlerGetCurrentNotFound(t *testing.T) {
 	}
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"Avatar not found"}` {
 		t.Errorf("body = %s", got)
+	}
+}
+
+// getAvatarWith — как getAvatar, но с заголовками запроса.
+func getAvatarWith(svc *fakeAvatarService, path string, header http.Header) *httptest.ResponseRecorder {
+	router := NewRouter(discardLogger(),
+		NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()),
+		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
+	)
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header = header
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAvatarHandlerGetCacheHeaders(t *testing.T) {
+	tests := []struct {
+		name      string
+		immutable bool
+		want      string
+	}{
+		{"immutable file is cached for a day", true, "max-age=86400"},
+		{"mutable file is revalidated", false, "no-cache"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{
+				file: &services.File{ETag: `"abc"`, Immutable: tt.immutable},
+				obj:  &domain.Object{Body: io.NopCloser(strings.NewReader("x")), Size: 1, ContentType: "image/png"},
+			}
+
+			rec := getAvatar(svc, "/api/v1/avatars/"+uuid.NewString())
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if got := rec.Header().Get("ETag"); got != `"abc"` {
+				t.Errorf("ETag = %s, want \"abc\"", got)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != tt.want {
+				t.Errorf("Cache-Control = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAvatarHandlerGetNotModified(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		etag        string
+		ifNoneMatch []string
+		want304     bool
+	}{
+		{"same etag", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{`"abc"`}, true},
+		{"current avatar, same etag", "/api/v1/users/user-42/avatar", `"abc"`, []string{`"abc"`}, true},
+		{"one of the list", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{`"x", "abc"`}, true},
+		{"one of several headers", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{`"x"`, `"abc"`}, true},
+		{"star", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{"*"}, true},
+		{"weak comparison", "/api/v1/avatars/" + uuid.NewString(), `W/"abc"`, []string{`"abc"`}, true},
+		{"weak in request", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{`W/"abc"`}, true},
+		{"other etag", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, []string{`"abd"`}, false},
+		{"no header", "/api/v1/avatars/" + uuid.NewString(), `"abc"`, nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{
+				file: &services.File{ETag: tt.etag, Immutable: true},
+				obj:  &domain.Object{Body: io.NopCloser(strings.NewReader("x")), Size: 1, ContentType: "image/png"},
+			}
+			header := http.Header{}
+			for _, v := range tt.ifNoneMatch {
+				header.Add("If-None-Match", v)
+			}
+
+			rec := getAvatarWith(svc, tt.path, header)
+
+			if !tt.want304 {
+				if rec.Code != http.StatusOK || !svc.opened {
+					t.Errorf("status = %d, opened = %v; want 200 and file opened", rec.Code, svc.opened)
+				}
+				return
+			}
+			if rec.Code != http.StatusNotModified {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotModified)
+			}
+			if rec.Body.Len() != 0 {
+				t.Errorf("body = %q, want empty", rec.Body)
+			}
+			if svc.opened {
+				t.Error("file was opened for 304")
+			}
+			if rec.Header().Get("ETag") != tt.etag || rec.Header().Get("Cache-Control") != "max-age=86400" {
+				t.Errorf("304 headers: ETag %q, Cache-Control %q", rec.Header().Get("ETag"), rec.Header().Get("Cache-Control"))
+			}
+		})
+	}
+}
+
+func TestAvatarHandlerGetErrorIsNotCached(t *testing.T) {
+	tests := []struct {
+		name string
+		svc  *fakeAvatarService
+	}{
+		{"not found", &fakeAvatarService{err: domain.ErrNotFound}},
+		{"file missing in s3", &fakeAvatarService{openErr: domain.ErrObjectNotFound}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := getAvatar(tt.svc, "/api/v1/avatars/"+uuid.NewString())
+
+			if rec.Code < 400 {
+				t.Fatalf("status = %d, want an error", rec.Code)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "" {
+				t.Errorf("Cache-Control = %q on error", got)
+			}
+			if got := rec.Header().Get("ETag"); got != "" {
+				t.Errorf("ETag = %q on error", got)
+			}
+		})
 	}
 }

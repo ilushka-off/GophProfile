@@ -360,7 +360,7 @@ func (c *closeTracker) Close() error {
 	return nil
 }
 
-func TestAvatarServiceGetFile(t *testing.T) {
+func TestAvatarServiceResolveFile(t *testing.T) {
 	id := uuid.New()
 	thumbKey := domain.ThumbnailKey(id, domain.ThumbnailSize100)
 	original := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
@@ -370,16 +370,17 @@ func TestAvatarServiceGetFile(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		avatar   *domain.Avatar
-		size     string
-		wantKey  string
-		wantType string
+		name          string
+		avatar        *domain.Avatar
+		size          string
+		wantKey       string
+		wantType      string
+		wantImmutable bool
 	}{
-		{"original, content type comes from the database", original, domain.SizeOriginal, original.S3Key, "image/png"},
-		{"thumbnail not ready falls back to original", original, domain.ThumbnailSize100, original.S3Key, "image/png"},
-		{"ready thumbnail", withThumbs, domain.ThumbnailSize100, thumbKey, "image/jpeg"},
-		{"other thumbnail not ready", withThumbs, domain.ThumbnailSize300, withThumbs.S3Key, "image/png"},
+		{"original, content type comes from the database", original, domain.SizeOriginal, original.S3Key, "image/png", true},
+		{"thumbnail not ready falls back to original", original, domain.ThumbnailSize100, original.S3Key, "image/png", false},
+		{"ready thumbnail", withThumbs, domain.ThumbnailSize100, thumbKey, "image/jpeg", true},
+		{"other thumbnail not ready", withThumbs, domain.ThumbnailSize300, withThumbs.S3Key, "image/png", false},
 	}
 
 	for _, tt := range tests {
@@ -388,12 +389,23 @@ func TestAvatarServiceGetFile(t *testing.T) {
 			d.repo.byID = tt.avatar
 			d.storage.obj, _ = objectOf([]byte("x"), "binary/octet-stream")
 
-			obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: tt.size})
+			f, err := d.svc.ResolveFile(context.Background(), id, FileOptions{Size: tt.size})
 			if err != nil {
-				t.Fatalf("get file: %v", err)
+				t.Fatalf("resolve file: %v", err)
 			}
-			if d.repo.gotID != id || d.storage.downloadedKey != tt.wantKey {
-				t.Errorf("looked up id %s and key %q, want %s and %q", d.repo.gotID, d.storage.downloadedKey, id, tt.wantKey)
+			if got := strings.Join(*d.log, ","); got != "repo.GetByID" {
+				t.Errorf("calls = %s, want only repo.GetByID: resolve must not touch s3", got)
+			}
+			if f.ContentType != tt.wantType || f.Immutable != tt.wantImmutable {
+				t.Errorf("file type %q, immutable %v; want %q, %v", f.ContentType, f.Immutable, tt.wantType, tt.wantImmutable)
+			}
+
+			obj, err := d.svc.Open(context.Background(), f)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			if d.storage.downloadedKey != tt.wantKey {
+				t.Errorf("downloaded key %q, want %q", d.storage.downloadedKey, tt.wantKey)
 			}
 			if obj.ContentType != tt.wantType || obj.Size != 1 {
 				t.Errorf("object type %q, size %d; want %q, 1", obj.ContentType, obj.Size, tt.wantType)
@@ -401,15 +413,12 @@ func TestAvatarServiceGetFile(t *testing.T) {
 		})
 	}
 
-	t.Run("not found skips s3", func(t *testing.T) {
+	t.Run("not found", func(t *testing.T) {
 		d := newDeps()
 		d.repo.err = domain.ErrNotFound
 
-		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := d.svc.ResolveFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("err = %v, want %v", err, domain.ErrNotFound)
-		}
-		if got := strings.Join(*d.log, ","); got != "repo.GetByID" {
-			t.Errorf("calls = %s, want only repo.GetByID", got)
 		}
 	})
 
@@ -418,25 +427,74 @@ func TestAvatarServiceGetFile(t *testing.T) {
 		d.repo.byID = original
 		d.storage.downloadErr = domain.ErrObjectNotFound
 
-		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrObjectNotFound) {
+		f, err := d.svc.ResolveFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal})
+		if err != nil {
+			t.Fatalf("resolve file: %v", err)
+		}
+		if _, err := d.svc.Open(context.Background(), f); !errors.Is(err, domain.ErrObjectNotFound) {
 			t.Fatalf("err = %v, want %v", err, domain.ErrObjectNotFound)
 		}
 	})
 }
 
-func TestAvatarServiceGetFileFormat(t *testing.T) {
+func TestAvatarServiceETag(t *testing.T) {
+	id := uuid.New()
+	a := &domain.Avatar{
+		ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png"),
+		ThumbnailS3Keys: map[string]string{domain.ThumbnailSize100: domain.ThumbnailKey(id, domain.ThumbnailSize100)},
+	}
+	etagOf := func(opts FileOptions) string {
+		t.Helper()
+		d := newDeps()
+		d.repo.byID = a
+		f, err := d.svc.ResolveFile(context.Background(), id, opts)
+		if err != nil {
+			t.Fatalf("resolve file: %v", err)
+		}
+		return f.ETag
+	}
+
+	original := etagOf(FileOptions{Size: domain.SizeOriginal})
+	if !strings.HasPrefix(original, `"`) || !strings.HasSuffix(original, `"`) {
+		t.Errorf("etag %s is not a quoted string", original)
+	}
+	if got := etagOf(FileOptions{Size: domain.SizeOriginal}); got != original {
+		t.Errorf("etag changed between requests: %s, %s", original, got)
+	}
+	if got := etagOf(FileOptions{Size: domain.SizeOriginal, Format: "image/png"}); got != original {
+		t.Errorf("format equal to the stored one changed etag: %s, want %s", got, original)
+	}
+	if got := etagOf(FileOptions{Size: domain.ThumbnailSize100}); got == original {
+		t.Error("thumbnail has the same etag as original")
+	}
+	converted := etagOf(FileOptions{Size: domain.SizeOriginal, Format: "image/webp"})
+	if converted == original || !strings.HasPrefix(converted, `W/"`) {
+		t.Errorf("converted etag = %s, want a weak etag different from %s", converted, original)
+	}
+}
+
+func TestAvatarServiceOpenFormat(t *testing.T) {
 	id := uuid.New()
 	pngData := encodePNG(t, 64, 48)
 	stored := &domain.Avatar{ID: id, MimeType: "image/png", S3Key: domain.OriginalKey(id, "png")}
+
+	open := func(t *testing.T, d *deps, format string) (*domain.Object, error) {
+		t.Helper()
+		f, err := d.svc.ResolveFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: format})
+		if err != nil {
+			t.Fatalf("resolve file: %v", err)
+		}
+		return d.svc.Open(context.Background(), f)
+	}
 
 	t.Run("same format is streamed as is", func(t *testing.T) {
 		d := newDeps()
 		d.repo.byID = stored
 		d.storage.obj, _ = objectOf(pngData, "image/png")
 
-		obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/png"})
+		obj, err := open(t, d, "image/png")
 		if err != nil {
-			t.Fatalf("get file: %v", err)
+			t.Fatalf("open: %v", err)
 		}
 		if obj != d.storage.obj {
 			t.Error("object was re-encoded, want the one from s3")
@@ -450,9 +508,9 @@ func TestAvatarServiceGetFileFormat(t *testing.T) {
 			var src *closeTracker
 			d.storage.obj, src = objectOf(pngData, "image/png")
 
-			obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: target})
+			obj, err := open(t, d, target)
 			if err != nil {
-				t.Fatalf("get file: %v", err)
+				t.Fatalf("open: %v", err)
 			}
 			defer obj.Body.Close()
 
@@ -482,7 +540,7 @@ func TestAvatarServiceGetFileFormat(t *testing.T) {
 		var src *closeTracker
 		d.storage.obj, src = objectOf([]byte("\x89PNG\r\n\x1a\nbroken"), "image/png")
 
-		if _, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/jpeg"}); err == nil {
+		if _, err := open(t, d, "image/jpeg"); err == nil {
 			t.Fatal("expected decode error")
 		}
 		if !src.closed {
@@ -495,9 +553,9 @@ func TestAvatarServiceGetFileFormat(t *testing.T) {
 		d.repo.byID = stored
 		d.storage.obj, _ = objectOf(encodePNG(t, 512, 512), "image/png")
 
-		obj, err := d.svc.GetFile(context.Background(), id, FileOptions{Size: domain.SizeOriginal, Format: "image/webp"})
+		obj, err := open(t, d, "image/webp")
 		if err != nil {
-			t.Fatalf("get file: %v", err)
+			t.Fatalf("open: %v", err)
 		}
 		// Кодировщик пишет в pipe: после Close его запись падает и горутина завершается.
 		if err := obj.Body.Close(); err != nil {
@@ -509,23 +567,30 @@ func TestAvatarServiceGetFileFormat(t *testing.T) {
 	})
 }
 
-func TestAvatarServiceGetCurrentFile(t *testing.T) {
+func TestAvatarServiceResolveCurrentFile(t *testing.T) {
 	id := uuid.New()
 
-	t.Run("looks up by user", func(t *testing.T) {
+	t.Run("looks up by user and is revalidated", func(t *testing.T) {
 		d := newDeps()
 		d.repo.byID = &domain.Avatar{ID: id, MimeType: "image/jpeg", S3Key: domain.OriginalKey(id, "jpg")}
 		d.storage.obj, _ = objectOf([]byte("x"), "")
 
-		obj, err := d.svc.GetCurrentFile(context.Background(), "user-42", FileOptions{Size: domain.SizeOriginal})
+		f, err := d.svc.ResolveCurrentFile(context.Background(), "user-42", FileOptions{Size: domain.SizeOriginal})
 		if err != nil {
-			t.Fatalf("get current file: %v", err)
+			t.Fatalf("resolve current file: %v", err)
 		}
-		if d.repo.gotUserID != "user-42" || d.storage.downloadedKey != d.repo.byID.S3Key {
-			t.Errorf("looked up user %q and key %q", d.repo.gotUserID, d.storage.downloadedKey)
+		if d.repo.gotUserID != "user-42" {
+			t.Errorf("looked up user %q, want user-42", d.repo.gotUserID)
 		}
-		if obj.ContentType != "image/jpeg" {
-			t.Errorf("content type = %q, want image/jpeg", obj.ContentType)
+		if f.Immutable {
+			t.Error("current avatar is immutable, but it changes after a new upload")
+		}
+		obj, err := d.svc.Open(context.Background(), f)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if d.storage.downloadedKey != d.repo.byID.S3Key || obj.ContentType != "image/jpeg" {
+			t.Errorf("downloaded key %q, type %q", d.storage.downloadedKey, obj.ContentType)
 		}
 	})
 
@@ -533,7 +598,7 @@ func TestAvatarServiceGetCurrentFile(t *testing.T) {
 		d := newDeps()
 		d.repo.err = domain.ErrNotFound
 
-		if _, err := d.svc.GetCurrentFile(context.Background(), "nobody", FileOptions{}); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := d.svc.ResolveCurrentFile(context.Background(), "nobody", FileOptions{Size: domain.SizeOriginal}); !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("err = %v, want %v", err, domain.ErrNotFound)
 		}
 		if got := strings.Join(*d.log, ","); got != "repo.GetCurrentByUser" {

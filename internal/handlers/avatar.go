@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -27,6 +28,12 @@ const (
 
 	queryParamSize   = "size"
 	queryParamFormat = "format"
+
+	// cacheImmutable — файл по этому URL не меняется, кешируем на сутки.
+	cacheImmutable = "max-age=86400"
+	// cacheRevalidate — хранить можно, но каждый раз сверять ETag: за тем же URL
+	// может оказаться другой файл (новая текущая аватарка, готовая миниатюра).
+	cacheRevalidate = "no-cache"
 
 	formFieldFile = "file"
 
@@ -54,8 +61,9 @@ var formatMimeTypes = map[string]string{
 // AvatarService — операции с аватарками, которые нужны хендлеру.
 type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
-	GetFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*domain.Object, error)
-	GetCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*domain.Object, error)
+	ResolveFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error)
+	ResolveCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*services.File, error)
+	Open(ctx context.Context, f *services.File) (*domain.Object, error)
 }
 
 // avatarResponse — модель Avatar из API: ответ на загрузку и элемент списка.
@@ -147,8 +155,8 @@ func (h *AvatarHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	obj, err := h.svc.GetFile(r.Context(), id, opts)
-	h.writeFile(w, r, obj, err)
+	f, err := h.svc.ResolveFile(r.Context(), id, opts)
+	h.writeFile(w, r, f, err)
 }
 
 // GetCurrent — GET /api/v1/users/{user_id}/avatar?size=&format=: как Get,
@@ -159,18 +167,32 @@ func (h *AvatarHandler) GetCurrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	obj, err := h.svc.GetCurrentFile(r.Context(), chi.URLParam(r, urlParamUserID), opts)
-	h.writeFile(w, r, obj, err)
+	f, err := h.svc.ResolveCurrentFile(r.Context(), chi.URLParam(r, urlParamUserID), opts)
+	h.writeFile(w, r, f, err)
 }
 
-// writeFile отдаёт картинку из сервиса или его ошибку.
-func (h *AvatarHandler) writeFile(w http.ResponseWriter, r *http.Request, obj *domain.Object, err error) {
+// writeFile отдаёт картинку, 304 на совпавший ETag или ошибку сервиса.
+// Заголовки кеширования ставятся только на успешный ответ, чтобы ошибка не осела в кеше.
+func (h *AvatarHandler) writeFile(w http.ResponseWriter, r *http.Request, f *services.File, err error) {
+	if err != nil {
+		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
+		return
+	}
+
+	if etagMatches(r.Header.Values("If-None-Match"), f.ETag) {
+		setCacheHeaders(w, f)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	obj, err := h.svc.Open(r.Context(), f)
 	if err != nil {
 		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
 		return
 	}
 	defer obj.Body.Close()
 
+	setCacheHeaders(w, f)
 	w.Header().Set("Content-Type", obj.ContentType)
 	// При конвертации формата размер заранее неизвестен — ответ уйдёт chunked.
 	if obj.Size >= 0 {
@@ -181,6 +203,30 @@ func (h *AvatarHandler) writeFile(w http.ResponseWriter, r *http.Request, obj *d
 	if _, err := io.Copy(w, obj.Body); err != nil {
 		h.logger.WarnContext(r.Context(), "stream avatar", "path", r.URL.Path, "err", err)
 	}
+}
+
+func setCacheHeaders(w http.ResponseWriter, f *services.File) {
+	w.Header().Set("ETag", f.ETag)
+	if f.Immutable {
+		w.Header().Set("Cache-Control", cacheImmutable)
+	} else {
+		w.Header().Set("Cache-Control", cacheRevalidate)
+	}
+}
+
+// etagMatches сравнивает If-None-Match с etag слабым сравнением (RFC 9110, 13.1.2):
+// заголовок может быть списком тегов или *, префикс W/ не учитывается.
+func etagMatches(ifNoneMatch []string, etag string) bool {
+	want := strings.TrimPrefix(etag, "W/")
+	for _, header := range ifNoneMatch {
+		for _, tag := range strings.Split(header, ",") {
+			tag = strings.TrimSpace(tag)
+			if tag == "*" || strings.TrimPrefix(tag, "W/") == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseFileOptions разбирает query-параметры size и format. Параметр, который
