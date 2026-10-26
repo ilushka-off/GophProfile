@@ -123,6 +123,30 @@ func (s *RepositorySuite) TestSoftDelete() {
 	s.ErrorIs(s.repo.SoftDelete(ctx, uuid.New()), domain.ErrNotFound, "delete missing")
 }
 
+func (s *RepositorySuite) TestRestore() {
+	ctx := context.Background()
+	a := s.createAvatar("user-42")
+
+	s.ErrorIs(s.repo.Restore(ctx, a.ID), domain.ErrNotFound, "restore not deleted")
+	s.Require().NoError(s.repo.SoftDelete(ctx, a.ID))
+	s.Require().NoError(s.repo.Restore(ctx, a.ID))
+
+	_, err := s.repo.GetByID(ctx, a.ID)
+	s.NoError(err, "get after restore")
+	s.ErrorIs(s.repo.Restore(ctx, uuid.New()), domain.ErrNotFound, "restore missing")
+}
+
+func (s *RepositorySuite) TestDelete() {
+	ctx := context.Background()
+	a := s.createAvatar("user-42")
+
+	s.Require().NoError(s.repo.Delete(ctx, a.ID))
+	var n int
+	s.Require().NoError(s.pool.QueryRow(ctx, `SELECT count(*) FROM avatars WHERE id = $1`, a.ID).Scan(&n))
+	s.Zero(n, "row is still there")
+	s.NoError(s.repo.Delete(ctx, a.ID), "delete missing")
+}
+
 func (s *RepositorySuite) TestCurrentAndList() {
 	ctx := context.Background()
 

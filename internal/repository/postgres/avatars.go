@@ -132,6 +132,31 @@ func (r *AvatarRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// Restore снимает пометку об удалении, если публикация avatar.deleted не
+// удалась. Если аватарки нет или она не удалена, возвращает domain.ErrNotFound.
+func (r *AvatarRepository) Restore(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE avatars
+		SET deleted_at = NULL, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NOT NULL`, id)
+	if err != nil {
+		return fmt.Errorf("restore avatar: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// Delete удаляет строку совсем — для отката загрузки, о которой не удалось
+// сообщить worker'у. Отсутствующая строка — не ошибка.
+func (r *AvatarRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	if _, err := r.pool.Exec(ctx, `DELETE FROM avatars WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete avatar: %w", err)
+	}
+	return nil
+}
+
 // SetProcessingStatus меняет processing_status неудалённой аватарки.
 // Если её нет или она удалена, возвращает domain.ErrNotFound.
 func (r *AvatarRepository) SetProcessingStatus(ctx context.Context, id uuid.UUID, status domain.ProcessingStatus) error {

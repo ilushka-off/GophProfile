@@ -19,6 +19,18 @@ func (f *fakeRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
 	return f.softDeleteErr
 }
 
+func (f *fakeRepo) Restore(_ context.Context, id uuid.UUID) error {
+	*f.log = append(*f.log, "repo.Restore")
+	f.restored = id
+	return f.restoreErr
+}
+
+func (f *fakeRepo) Delete(_ context.Context, id uuid.UUID) error {
+	*f.log = append(*f.log, "repo.Delete")
+	f.deleted = id
+	return f.deleteErr
+}
+
 func (f *fakeRepo) ListByUser(_ context.Context, userID string) ([]domain.Avatar, error) {
 	*f.log = append(*f.log, "repo.ListByUser")
 	f.gotUserID = userID
@@ -164,13 +176,23 @@ func TestAvatarServiceDeleteFailures(t *testing.T) {
 			wantCalls: calls{"repo.GetByID", "repo.SoftDelete"},
 		},
 		{
-			name: "publish fails",
+			name: "publish fails, soft delete is rolled back",
 			setup: func(d *deps) {
 				d.repo.byID = ownedAvatar("user-42")
 				d.publisher.err = errDB
 			},
 			wantErr:   errDB,
-			wantCalls: calls{"repo.GetByID", "repo.SoftDelete", "publisher.Publish"},
+			wantCalls: calls{"repo.GetByID", "repo.SoftDelete", "publisher.Publish", "repo.Restore"},
+		},
+		{
+			name: "publish and rollback fail",
+			setup: func(d *deps) {
+				d.repo.byID = ownedAvatar("user-42")
+				d.publisher.err = errDB
+				d.repo.restoreErr = errors.New("restore failed")
+			},
+			wantErr:   errDB,
+			wantCalls: calls{"repo.GetByID", "repo.SoftDelete", "publisher.Publish", "repo.Restore"},
 		},
 	}
 

@@ -35,6 +35,10 @@ type fakeRepo struct {
 	list             []domain.Avatar
 	softDeleteErr    error
 	softDeleted      uuid.UUID
+	restoreErr       error
+	restored         uuid.UUID
+	deleteErr        error
+	deleted          uuid.UUID
 }
 
 func (f *fakeRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Avatar, error) {
@@ -322,18 +326,36 @@ func TestAvatarServiceUploadFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("publish fails, row stays pending", func(t *testing.T) {
+	t.Run("publish fails, row and original are removed", func(t *testing.T) {
 		d := newDeps()
 		d.publisher.err = errBoom
 
 		if _, err := d.svc.Upload(context.Background(), uploadInput(encodePNG(t, 1, 1))); !errors.Is(err, errBoom) {
 			t.Fatalf("err = %v, want %v", err, errBoom)
 		}
-		if d.repo.created == nil || d.repo.created.ProcessingStatus != domain.ProcessingStatusPending {
-			t.Error("row must be created with pending status")
+		if got := strings.Join(*d.log, ","); got != "storage.Upload,repo.Create,publisher.Publish,repo.Delete,storage.Delete" {
+			t.Errorf("calls = %s", got)
+		}
+		if d.repo.created == nil || d.repo.deleted != d.repo.created.ID {
+			t.Errorf("deleted row %s, want the created one", d.repo.deleted)
+		}
+		if len(d.storage.deleted) != 1 || d.storage.deleted[0] != d.storage.key {
+			t.Errorf("deleted = %v, want [%s]", d.storage.deleted, d.storage.key)
+		}
+	})
+
+	t.Run("publish and rollback fail, original stays", func(t *testing.T) {
+		d := newDeps()
+		d.publisher.err = errBoom
+		errDB := errors.New("db down")
+		d.repo.deleteErr = errDB
+
+		_, err := d.svc.Upload(context.Background(), uploadInput(encodePNG(t, 1, 1)))
+		if !errors.Is(err, errBoom) || !errors.Is(err, errDB) {
+			t.Fatalf("err = %v, want both %v and %v", err, errBoom, errDB)
 		}
 		if len(d.storage.deleted) != 0 {
-			t.Errorf("original must stay in S3 for republishing, deleted %v", d.storage.deleted)
+			t.Errorf("original is still referenced by the row, deleted %v", d.storage.deleted)
 		}
 	})
 }

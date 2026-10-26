@@ -67,6 +67,8 @@ type AvatarRepository interface {
 	GetCurrentByUser(ctx context.Context, userID string) (*domain.Avatar, error)
 	ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error)
 	SoftDelete(ctx context.Context, id uuid.UUID) error
+	Restore(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 // Storage — файловое хранилище (S3), которое нужно сервису.
@@ -112,7 +114,8 @@ type UploadInput struct {
 
 // Upload сохраняет оригинал в S3, строку в БД со статусом pending и публикует
 // avatar.uploaded. Миниатюры не ждёт: их создаст worker.
-// Если публикация не удалась, строка остаётся pending и возвращается ошибка.
+// Если публикация не удалась, строка и оригинал удаляются: ошибка значит,
+// что ничего не сохранилось, и запрос можно повторить.
 func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Avatar, error) {
 	if in.Size > s.maxUploadSize {
 		return nil, domain.ErrTooLarge
@@ -162,9 +165,27 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	}
 
 	if err := s.publishUploaded(ctx, a); err != nil {
-		return nil, err
+		// Без события миниатюры никто не создаст, и аватарка навсегда осталась бы
+		// в processing. Если брокер всё же принял сообщение, worker не найдёт
+		// строку и пропустит его.
+		return nil, s.rollbackUpload(ctx, a, err)
 	}
 	return a, nil
+}
+
+// rollbackUpload удаляет строку и оригинал после неудачной публикации и
+// возвращает err вместе с ошибками отката. Контекст запроса может быть уже
+// отменён, а откатить всё равно нужно.
+func (s *AvatarService) rollbackUpload(ctx context.Context, a *domain.Avatar, err error) error {
+	ctx = context.WithoutCancel(ctx)
+	if delErr := s.repo.Delete(ctx, a.ID); delErr != nil {
+		// Оригинал оставляем: на него ссылается строка.
+		return errors.Join(err, fmt.Errorf("rollback avatar row: %w", delErr))
+	}
+	if delErr := s.storage.Delete(ctx, a.S3Key); delErr != nil {
+		return errors.Join(err, fmt.Errorf("cleanup original: %w", delErr))
+	}
+	return err
 }
 
 // Get возвращает неудалённую аватарку по id или domain.ErrNotFound.
@@ -321,8 +342,9 @@ func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID strin
 }
 
 // softDelete помечает аватарку удалённой и публикует avatar.deleted. Если
-// публикация не удалась, строка остаётся удалённой, а файлы — в S3: клиент
-// получит 500, а файлы можно убрать повторной публикацией.
+// публикация не удалась, пометка снимается: иначе повторный DELETE вернул бы
+// 404, а файлы навсегда остались бы в S3. Ошибка значит, что аватарка на месте
+// и запрос можно повторить.
 func (s *AvatarService) softDelete(ctx context.Context, a *domain.Avatar) error {
 	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
 		return err
@@ -336,10 +358,20 @@ func (s *AvatarService) softDelete(ctx context.Context, a *domain.Avatar) error 
 		keys = append(keys, domain.ThumbnailKey(a.ID, size))
 	}
 
-	return s.publish(ctx, broker.TypeAvatarDeleted, a.ID, broker.AvatarDeleteEvent{
+	err := s.publish(ctx, broker.TypeAvatarDeleted, a.ID, broker.AvatarDeleteEvent{
 		AvatarID: a.ID.String(),
 		S3Keys:   keys,
 	})
+	if err != nil {
+		// Если брокер всё же принял сообщение (например, не дождались
+		// подтверждения), worker удалит файлы восстановленной аватарки.
+		// Надёжно это решает только transactional outbox.
+		if restoreErr := s.repo.Restore(context.WithoutCancel(ctx), a.ID); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback soft delete: %w", restoreErr))
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *AvatarService) publishUploaded(ctx context.Context, a *domain.Avatar) error {
