@@ -411,8 +411,18 @@ func validateUserID(userID string) string {
 		return detailsUserIDRequired
 	case utf8.RuneCountInString(userID) > maxUserIDLength:
 		return detailsUserIDTooLong
+	case strings.IndexFunc(userID, func(r rune) bool { return !isUserIDRune(r) }) >= 0:
+		return detailsUserIDInvalidChars
 	}
 	return ""
+}
+
+// isUserIDRune — допустимый символ user_id: латиница, цифры и . _ - @.
+// Без пробелов, слешей и управляющих символов user_id безопасно попадает
+// в пути URL, логи и HTML.
+func isUserIDRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+		r == '.' || r == '_' || r == '-' || r == '@'
 }
 
 // parseMultipart ограничивает размер тела и разбирает multipart-форму.

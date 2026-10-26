@@ -61,17 +61,17 @@ func webUploadRequest(t *testing.T, userID string, content []byte) *http.Request
 }
 
 func TestWebUploadRedirectsToGallery(t *testing.T) {
-	svc := &fakeAvatarService{avatar: &domain.Avatar{ID: uuid.New(), UserID: "user 42/x"}}
+	svc := &fakeAvatarService{avatar: &domain.Avatar{ID: uuid.New(), UserID: "user@42.x"}}
 	rec := httptest.NewRecorder()
-	newTestRouter(svc).ServeHTTP(rec, webUploadRequest(t, "user 42/x", []byte("png bytes")))
+	newTestRouter(svc).ServeHTTP(rec, webUploadRequest(t, "user@42.x", []byte("png bytes")))
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303, body %s", rec.Code, rec.Body)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/web/gallery/user%2042%2Fx" {
+	if loc := rec.Header().Get("Location"); loc != "/web/gallery/user@42.x" {
 		t.Errorf("Location = %q, want escaped gallery path", loc)
 	}
-	if svc.gotInput.UserID != "user 42/x" || string(svc.gotBody) != "png bytes" {
+	if svc.gotInput.UserID != "user@42.x" || string(svc.gotBody) != "png bytes" {
 		t.Errorf("service got user %q body %q", svc.gotInput.UserID, svc.gotBody)
 	}
 }

@@ -602,3 +602,26 @@ func TestAvatarHandlerGetErrorIsNotCached(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateUserID(t *testing.T) {
+	tests := []struct {
+		userID string
+		want   string
+	}{
+		{"user-42", ""},
+		{"Ivan.Petrov_1@example.com", ""},
+		{strings.Repeat("a", maxUserIDLength), ""},
+		{"", detailsUserIDRequired},
+		{strings.Repeat("a", maxUserIDLength+1), detailsUserIDTooLong},
+		{"user 42", detailsUserIDInvalidChars},
+		{"../admin", detailsUserIDInvalidChars},
+		{"user\n42", detailsUserIDInvalidChars},
+		{"<script>", detailsUserIDInvalidChars},
+		{"пользователь", detailsUserIDInvalidChars},
+	}
+	for _, tt := range tests {
+		if got := validateUserID(tt.userID); got != tt.want {
+			t.Errorf("validateUserID(%q) = %q, want %q", tt.userID, got, tt.want)
+		}
+	}
+}

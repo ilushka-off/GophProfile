@@ -12,11 +12,12 @@ const (
 	detailsInvalidFormat = "Supported formats: jpeg, png, webp"
 	detailsForbidden     = "You can only delete your own avatars"
 
-	detailsUserIDRequired  = "X-User-ID header is required"
-	detailsUserIDTooLong   = "X-User-ID must be at most 255 characters"
-	detailsFileRequired    = "file is required"
-	detailsInvalidAvatarID = "avatar_id must be a valid UUID"
-	detailsInvalidSize     = "size: allowed values 100x100, 300x300, original"
+	detailsUserIDRequired     = "X-User-ID header is required"
+	detailsUserIDTooLong      = "X-User-ID must be at most 255 characters"
+	detailsUserIDInvalidChars = "X-User-ID may contain only latin letters, digits and . _ - @"
+	detailsFileRequired       = "file is required"
+	detailsInvalidAvatarID    = "avatar_id must be a valid UUID"
+	detailsInvalidSize        = "size: allowed values 100x100, 300x300, original"
 	// В ТЗ текст есть только для size, для format — по аналогии.
 	detailsInvalidFormatParam = "format: allowed values jpeg, png, webp"
 	detailsNotMultipart       = "request body must be multipart/form-data"
