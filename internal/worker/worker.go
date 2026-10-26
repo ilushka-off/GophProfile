@@ -67,6 +67,10 @@ func (p *Processor) Handle(ctx context.Context, msg broker.Message) error {
 	switch msg.Type {
 	case broker.TypeAvatarUploaded:
 		return p.handleUploaded(ctx, msg)
+	case broker.TypeAvatarProcess:
+		return p.handleProcess(ctx, msg)
+	case broker.TypeAvatarDeleted:
+		return p.handleDeleted(ctx, msg)
 	default:
 		return fmt.Errorf("%w: %q", ErrUnknownEvent, msg.Type)
 	}
@@ -98,6 +102,57 @@ func (p *Processor) handleUploaded(ctx context.Context, msg broker.Message) erro
 	}
 
 	return p.makeThumbnails(ctx, a, domain.ThumbnailSizes)
+}
+
+// handleProcess пересоздаёт миниатюры из списка операций, даже если они уже
+// готовы: ради этого событие и публикуют. Пустой список — все миниатюры.
+func (p *Processor) handleProcess(ctx context.Context, msg broker.Message) error {
+	var ev broker.AvatarProcessEvent
+	if err := json.Unmarshal(msg.Body, &ev); err != nil {
+		return fmt.Errorf("%w: decode %s: %v", ErrBadMessage, msg.Type, err)
+	}
+	id, err := uuid.Parse(ev.AvatarID)
+	if err != nil {
+		return fmt.Errorf("%w: avatar_id %q: %v", ErrBadMessage, ev.AvatarID, err)
+	}
+
+	sizes := domain.ThumbnailSizes
+	if len(ev.Operations) > 0 {
+		sizes = make([]string, 0, len(ev.Operations))
+		for _, op := range ev.Operations {
+			if _, ok := thumbnailSides[op.Size]; op.Type != broker.OpThumbnail || !ok {
+				return fmt.Errorf("%w: unsupported operation %+v", ErrBadMessage, op)
+			}
+			sizes = append(sizes, op.Size)
+		}
+	}
+
+	a, err := p.repo.GetByID(ctx, id)
+	if errors.Is(err, domain.ErrNotFound) {
+		p.logger.InfoContext(ctx, "avatar is deleted, skip processing", "avatar_id", id, "message_id", msg.ID)
+		return nil
+	}
+	if err != nil {
+		return broker.Retryable(err)
+	}
+	return p.makeThumbnails(ctx, a, sizes)
+}
+
+// handleDeleted удаляет из S3 файлы из события. Отсутствующий файл — не
+// ошибка, поэтому повторная доставка ничего не ломает.
+func (p *Processor) handleDeleted(ctx context.Context, msg broker.Message) error {
+	var ev broker.AvatarDeleteEvent
+	if err := json.Unmarshal(msg.Body, &ev); err != nil {
+		return fmt.Errorf("%w: decode %s: %v", ErrBadMessage, msg.Type, err)
+	}
+
+	for _, key := range ev.S3Keys {
+		if err := p.storage.Delete(ctx, key); err != nil {
+			return broker.Retryable(err)
+		}
+	}
+	p.logger.InfoContext(ctx, "avatar files deleted", "avatar_id", ev.AvatarID, "keys", len(ev.S3Keys))
+	return nil
 }
 
 // makeThumbnails скачивает оригинал, создаёт миниатюры sizes в JPEG, кладёт
@@ -168,13 +223,14 @@ func (p *Processor) downloadImage(ctx context.Context, key string) (image.Image,
 	return img, nil
 }
 
-// MarkFailed — обёртка над обработчиком: если обработка загрузки окончательно
-// не удалась (постоянная ошибка или кончились повторы), ставит
+// MarkFailed — обёртка над обработчиком: если создание миниатюр окончательно
+// не удалось (постоянная ошибка или кончились повторы), ставит
 // processing_status = failed. Ошибку возвращает дальше, чтобы сообщение ушло в DLQ.
 func (p *Processor) MarkFailed(next broker.Handler) broker.Handler {
 	return func(ctx context.Context, msg broker.Message) error {
 		err := next(ctx, msg)
-		if err == nil || ctx.Err() != nil || msg.Type != broker.TypeAvatarUploaded {
+		if err == nil || ctx.Err() != nil ||
+			(msg.Type != broker.TypeAvatarUploaded && msg.Type != broker.TypeAvatarProcess) {
 			return err
 		}
 
