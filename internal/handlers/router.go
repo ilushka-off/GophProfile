@@ -13,7 +13,7 @@ import (
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
 // /health и /web вне версии API и группу /api/v1 для эндпоинтов сервиса.
-func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler *AvatarHandler) http.Handler {
+func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler *AvatarHandler, webHandler *WebHandler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
@@ -29,8 +29,11 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 
 	r.Get("/health", healthHandler.Check)
 
+	r.Get("/", webHandler.Root)
 	r.Route("/web", func(r chi.Router) {
-		// /web/upload, /web/gallery/{user_id} и редирект с / — в GP-18.
+		r.Get("/upload", webHandler.UploadForm)
+		r.Post("/upload", webHandler.Upload)
+		r.Get("/gallery/{user_id}", webHandler.Gallery)
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {

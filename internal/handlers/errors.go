@@ -14,21 +14,30 @@ import (
 // Текст err клиенту не уходит: в обёрнутой ошибке видна внутренняя цепочка вызовов.
 // maxUploadSize нужен для ответа 413.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error, maxUploadSize int64) {
+	status, resp := serviceErrorResponse(err, maxUploadSize)
+	if status == http.StatusInternalServerError {
+		logger.ErrorContext(r.Context(), "unhandled service error", "method", r.Method, "path", r.URL.Path, "err", err)
+	}
+	httpx.WriteJSON(w, status, resp)
+}
+
+// serviceErrorResponse сопоставляет ошибку сервиса со статусом и телом ответа.
+// Всё неизвестное — 500 без подробностей. Общая для API и веб-интерфейса.
+func serviceErrorResponse(err error, maxUploadSize int64) (int, httpx.ErrorResponse) {
 	var verr *domain.ValidationError
 	switch {
 	case errors.As(err, &verr):
-		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, verr.Details)
+		return http.StatusBadRequest, httpx.ErrorResponse{Error: msgInvalidRequest, Details: verr.Details}
 	case errors.Is(err, domain.ErrInvalidFormat):
-		httpx.WriteError(w, http.StatusBadRequest, msgInvalidFormat, detailsInvalidFormat)
+		return http.StatusBadRequest, httpx.ErrorResponse{Error: msgInvalidFormat, Details: detailsInvalidFormat}
 	case errors.Is(err, domain.ErrForbidden):
-		httpx.WriteError(w, http.StatusForbidden, msgForbidden, detailsForbidden)
+		return http.StatusForbidden, httpx.ErrorResponse{Error: msgForbidden, Details: detailsForbidden}
 	case errors.Is(err, domain.ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, msgNotFound, "")
+		return http.StatusNotFound, httpx.ErrorResponse{Error: msgNotFound}
 	case errors.Is(err, domain.ErrTooLarge):
-		writeTooLarge(w, maxUploadSize)
+		return http.StatusRequestEntityTooLarge, httpx.ErrorResponse{Error: msgTooLarge, MaxSize: maxUploadSize}
 	default:
-		logger.ErrorContext(r.Context(), "unhandled service error", "method", r.Method, "path", r.URL.Path, "err", err)
-		httpx.WriteError(w, http.StatusInternalServerError, msgInternal, "")
+		return http.StatusInternalServerError, httpx.ErrorResponse{Error: msgInternal}
 	}
 }
 

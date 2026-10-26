@@ -17,6 +17,7 @@ import (
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/services"
 	"go-avatar-service/internal/storage/s3"
+	"go-avatar-service/web"
 )
 
 // Таймауты HTTP-сервера и корректного завершения.
@@ -75,11 +76,17 @@ func run() error {
 	publisher := broker.NewLogPublisher(logger)
 	defer publisher.Close()
 
+	templates, err := web.Templates()
+	if err != nil {
+		return fmt.Errorf("parse web templates: %w", err)
+	}
+
 	avatarService := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
 
 	router := handlers.NewRouter(logger,
 		handlers.NewHealthHandler(pool, storage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
+		handlers.NewWebHandler(avatarService, templates, cfg.MaxUploadSize, logger),
 	)
 
 	srv := &http.Server{

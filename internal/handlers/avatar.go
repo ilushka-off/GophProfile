@@ -174,22 +174,15 @@ func (h *AvatarHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Лимит ставится до чтения тела, чтобы большой файл не попал ни в память, ни на диск.
-	r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadSize+multipartOverhead)
-	if err := r.ParseMultipartForm(multipartMemory); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+	if err := parseMultipart(w, r, h.maxUploadSize); err != nil {
+		if errors.Is(err, domain.ErrTooLarge) {
 			writeTooLarge(w, h.maxUploadSize)
 			return
 		}
 		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, detailsNotMultipart)
 		return
 	}
-	defer func() {
-		if err := r.MultipartForm.RemoveAll(); err != nil {
-			h.logger.WarnContext(r.Context(), "remove multipart temp files", "err", err)
-		}
-	}()
+	defer removeMultipart(r, h.logger)
 
 	file, header, err := r.FormFile(formFieldFile)
 	if err != nil {
@@ -402,13 +395,44 @@ func parseAvatarID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // 255 символов, пишет 400 и возвращает false.
 func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	userID := r.Header.Get(headerUserID)
-	switch {
-	case userID == "":
-		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, detailsUserIDRequired)
-		return "", false
-	case utf8.RuneCountInString(userID) > maxUserIDLength:
-		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, detailsUserIDTooLong)
+	if details := validateUserID(userID); details != "" {
+		httpx.WriteError(w, http.StatusBadRequest, msgInvalidRequest, details)
 		return "", false
 	}
 	return userID, true
+}
+
+// validateUserID проверяет user_id и возвращает причину отказа для details
+// или пустую строку, если user_id подходит.
+func validateUserID(userID string) string {
+	switch {
+	case userID == "":
+		return detailsUserIDRequired
+	case utf8.RuneCountInString(userID) > maxUserIDLength:
+		return detailsUserIDTooLong
+	}
+	return ""
+}
+
+// parseMultipart ограничивает размер тела и разбирает multipart-форму.
+// Лимит ставится до чтения тела, чтобы большой файл не попал ни в память, ни на диск.
+// Тело больше лимита — domain.ErrTooLarge, не multipart — другая ошибка.
+// После успешного разбора вызывающий удаляет временные файлы через removeMultipart.
+func parseMultipart(w http.ResponseWriter, r *http.Request, maxUploadSize int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize+multipartOverhead)
+	if err := r.ParseMultipartForm(multipartMemory); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return domain.ErrTooLarge
+		}
+		return err
+	}
+	return nil
+}
+
+// removeMultipart удаляет временные файлы, которые создал parseMultipart.
+func removeMultipart(r *http.Request, logger *slog.Logger) {
+	if err := r.MultipartForm.RemoveAll(); err != nil {
+		logger.WarnContext(r.Context(), "remove multipart temp files", "err", err)
+	}
 }

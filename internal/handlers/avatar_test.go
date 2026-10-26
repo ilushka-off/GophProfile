@@ -271,10 +271,7 @@ func TestAvatarHandlerUploadErrors(t *testing.T) {
 
 // getAvatar прогоняет GET через роутер, чтобы {avatar_id} разобрал chi.
 func getAvatar(svc *fakeAvatarService, path string) *httptest.ResponseRecorder {
-	router := NewRouter(discardLogger(),
-		healthyHandler(),
-		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
-	)
+	router := newTestRouter(svc)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 	return rec
@@ -486,10 +483,7 @@ func TestAvatarHandlerGetCurrentNotFound(t *testing.T) {
 
 // getAvatarWith — как getAvatar, но с заголовками запроса.
 func getAvatarWith(svc *fakeAvatarService, path string, header http.Header) *httptest.ResponseRecorder {
-	router := NewRouter(discardLogger(),
-		healthyHandler(),
-		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
-	)
+	router := newTestRouter(svc)
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header = header
 	rec := httptest.NewRecorder()
