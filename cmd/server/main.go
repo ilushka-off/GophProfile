@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"go-avatar-service/internal/broker"
+	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/repository/postgres"
@@ -72,9 +72,15 @@ func run() error {
 		return fmt.Errorf("ensure bucket: %w", err)
 	}
 
-	// TODO: заменить на фабрику RabbitMQ/Kafka по BROKER, когда появятся реализации.
-	publisher := broker.NewLogPublisher(logger)
-	defer publisher.Close()
+	publisher, err := factory.NewPublisher(cfg.Broker, logger)
+	if err != nil {
+		return fmt.Errorf("connect to broker: %w", err)
+	}
+	defer func() {
+		if err := publisher.Close(); err != nil {
+			slog.Warn("close broker publisher", "err", err)
+		}
+	}()
 
 	templates, err := web.Templates()
 	if err != nil {
