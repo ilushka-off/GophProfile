@@ -6,11 +6,12 @@ export
 BIN_DIR        := bin
 MIGRATIONS_DIR := internal/repository/postgres/migrations
 COVER_FILE     := coverage.out
+COVER_MIN      := 50
 BROKER         ?= rabbitmq
 
 COMPOSE := docker compose --env-file $(ENV_FILE) -f docker/docker-compose.yaml --profile $(BROKER)
 
-.PHONY: help build run run-worker test cover lint migrate migrate-down up down logs
+.PHONY: help build run run-worker test test-short cover lint migrate migrate-down up down logs
 
 help: ## Показать список команд
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -25,12 +26,18 @@ run: ## Запустить server локально
 run-worker: ## Запустить worker локально
 	go run ./cmd/worker
 
-test: ## Запустить тесты
+test: ## Все тесты, включая интеграционные (нужен Docker для testcontainers)
 	go test -count=1 ./...
 
-cover: ## Тесты с отчётом о покрытии
+test-short: ## Только unit-тесты, без контейнеров
+	go test -count=1 -short ./...
+
+cover: ## Тесты с отчётом о покрытии; падает, если покрытие ниже COVER_MIN
 	go test -count=1 -coverprofile=$(COVER_FILE) ./...
 	go tool cover -func=$(COVER_FILE)
+	@go tool cover -func=$(COVER_FILE) | awk -v min=$(COVER_MIN) '/^total:/ { sub("%", "", $$3); \
+		if ($$3 + 0 < min) { printf "coverage %s%% is below %s%%\n", $$3, min; exit 1 } \
+		else printf "coverage %s%% >= %s%%\n", $$3, min }'
 
 lint: ## Запустить golangci-lint
 	golangci-lint run ./...

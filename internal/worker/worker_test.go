@@ -228,8 +228,10 @@ func TestProcessorErrors(t *testing.T) {
 			wantErr: ErrUnknownEvent,
 		},
 		{
-			name:    "bad json",
-			msg:     func(*testing.T) broker.Message { return broker.Message{Type: broker.TypeAvatarUploaded, Body: []byte("{")} },
+			name: "bad json",
+			msg: func(*testing.T) broker.Message {
+				return broker.Message{Type: broker.TypeAvatarUploaded, Body: []byte("{")}
+			},
 			wantErr: ErrBadMessage,
 		},
 		{
