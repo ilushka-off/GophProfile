@@ -58,7 +58,9 @@ func run() error {
 	}()
 
 	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), storage, logger)
-	handler := processor.MarkFailed(processor.Handle)
+	handler := processor.MarkFailed(
+		worker.Deduplicate(postgres.NewMessageLog(pool), logger, processor.Handle),
+	)
 
 	slog.Info("starting worker", "broker", cfg.Broker.Kind)
 	if err := consumer.Consume(ctx, handler); err != nil {
