@@ -134,6 +134,11 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	return a, nil
 }
 
+// Get возвращает неудалённую аватарку по id или domain.ErrNotFound.
+func (s *AvatarService) Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, error) {
+	return s.repo.GetByID(ctx, id)
+}
+
 // FileOptions — какую картинку отдать. Значения уже проверены хендлером.
 type FileOptions struct {
 	// Size — domain.ThumbnailSize100, domain.ThumbnailSize300 или domain.SizeOriginal.

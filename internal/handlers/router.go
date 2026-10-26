@@ -36,6 +36,7 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/avatars", avatarHandler.Upload)
 		r.Get("/avatars/{avatar_id}", avatarHandler.Get)
+		r.Get("/avatars/{avatar_id}/metadata", avatarHandler.Metadata)
 		r.Get("/users/{user_id}/avatar", avatarHandler.GetCurrent)
 	})
 

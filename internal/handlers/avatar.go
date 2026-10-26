@@ -61,6 +61,7 @@ var formatMimeTypes = map[string]string{
 // AvatarService — операции с аватарками, которые нужны хендлеру.
 type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
+	Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, error)
 	ResolveFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error)
 	ResolveCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*services.File, error)
 	Open(ctx context.Context, f *services.File) (*domain.Object, error)
@@ -79,10 +80,73 @@ func newAvatarResponse(a *domain.Avatar) avatarResponse {
 	return avatarResponse{
 		ID:        a.ID.String(),
 		UserID:    a.UserID,
-		URL:       "/api/v1/avatars/" + a.ID.String(),
+		URL:       avatarURL(a.ID),
 		Status:    a.APIStatus(),
-		CreatedAt: a.CreatedAt.UTC().Truncate(time.Second),
+		CreatedAt: apiTime(a.CreatedAt),
 	}
+}
+
+// metadataResponse — модель AvatarMetadata из API: метаданные и элемент списка.
+type metadataResponse struct {
+	ID         string              `json:"id"`
+	UserID     string              `json:"user_id"`
+	FileName   string              `json:"file_name"`
+	MimeType   string              `json:"mime_type"`
+	Size       int64               `json:"size"`
+	Dimensions dimensionsResponse  `json:"dimensions"`
+	Thumbnails []thumbnailResponse `json:"thumbnails"`
+	Status     string              `json:"status"`
+	CreatedAt  time.Time           `json:"created_at"`
+	UpdatedAt  time.Time           `json:"updated_at"`
+}
+
+type dimensionsResponse struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type thumbnailResponse struct {
+	Size string `json:"size"`
+	URL  string `json:"url"`
+}
+
+// thumbnailSizes — порядок миниатюр в ответе: от маленькой к большой.
+var thumbnailSizes = []string{domain.ThumbnailSize100, domain.ThumbnailSize300}
+
+func newMetadataResponse(a *domain.Avatar) metadataResponse {
+	// В thumbnails только готовые миниатюры. Пустой слайс, а не nil: в JSON нужен [], а не null.
+	thumbnails := make([]thumbnailResponse, 0, len(thumbnailSizes))
+	for _, size := range thumbnailSizes {
+		if _, ok := a.ThumbnailS3Keys[size]; ok {
+			thumbnails = append(thumbnails, thumbnailResponse{
+				Size: size,
+				URL:  avatarURL(a.ID) + "?" + queryParamSize + "=" + size,
+			})
+		}
+	}
+
+	return metadataResponse{
+		ID:         a.ID.String(),
+		UserID:     a.UserID,
+		FileName:   a.FileName,
+		MimeType:   a.MimeType,
+		Size:       a.SizeBytes,
+		Dimensions: dimensionsResponse{Width: a.Width, Height: a.Height},
+		Thumbnails: thumbnails,
+		Status:     a.APIStatus(),
+		CreatedAt:  apiTime(a.CreatedAt),
+		UpdatedAt:  apiTime(a.UpdatedAt),
+	}
+}
+
+// avatarURL — путь, по которому отдаётся картинка аватарки.
+func avatarURL(id uuid.UUID) string {
+	return "/api/v1/avatars/" + id.String()
+}
+
+// apiTime приводит время к формату API: RFC 3339 в UTC с точностью до секунды.
+func apiTime(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Second)
 }
 
 // AvatarHandler обслуживает эндпоинты /api/v1/avatars.
@@ -157,6 +221,22 @@ func (h *AvatarHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	f, err := h.svc.ResolveFile(r.Context(), id, opts)
 	h.writeFile(w, r, f, err)
+}
+
+// Metadata — GET /api/v1/avatars/{avatar_id}/metadata: описание аватарки
+// и ссылки на готовые миниатюры.
+func (h *AvatarHandler) Metadata(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseAvatarID(w, r)
+	if !ok {
+		return
+	}
+
+	a, err := h.svc.Get(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, newMetadataResponse(a))
 }
 
 // GetCurrent — GET /api/v1/users/{user_id}/avatar?size=&format=: как Get,
