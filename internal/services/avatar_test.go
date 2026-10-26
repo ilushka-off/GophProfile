@@ -32,6 +32,9 @@ type fakeRepo struct {
 	byID             *domain.Avatar
 	gotID            uuid.UUID
 	gotUserID        string
+	list             []domain.Avatar
+	softDeleteErr    error
+	softDeleted      uuid.UUID
 }
 
 func (f *fakeRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Avatar, error) {

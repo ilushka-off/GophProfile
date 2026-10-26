@@ -259,24 +259,65 @@ func convert(obj *domain.Object, mimeType string) (*domain.Object, error) {
 	return &domain.Object{Body: pr, Size: -1, ContentType: mimeType}, nil
 }
 
+// Delete мягко удаляет аватарку id от имени userID и публикует avatar.deleted:
+// файлы из S3 удалит worker. Чужая аватарка — domain.ErrForbidden,
+// удалённая или несуществующая — domain.ErrNotFound.
+func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+	a, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if a.UserID != userID {
+		return domain.ErrForbidden
+	}
+	return s.softDelete(ctx, a)
+}
+
+// softDelete помечает аватарку удалённой и публикует avatar.deleted. Если
+// публикация не удалась, строка остаётся удалённой, а файлы — в S3: клиент
+// получит 500, а файлы можно убрать повторной публикацией.
+func (s *AvatarService) softDelete(ctx context.Context, a *domain.Avatar) error {
+	if err := s.repo.SoftDelete(ctx, a.ID); err != nil {
+		return err
+	}
+
+	// Ключи миниатюр берутся по всем размерам, а не из thumbnail_s3_keys:
+	// worker может дописать миниатюры уже после того, как событие ушло.
+	keys := make([]string, 0, 1+len(domain.ThumbnailSizes))
+	keys = append(keys, a.S3Key)
+	for _, size := range domain.ThumbnailSizes {
+		keys = append(keys, domain.ThumbnailKey(a.ID, size))
+	}
+
+	return s.publish(ctx, broker.TypeAvatarDeleted, a.ID, broker.AvatarDeleteEvent{
+		AvatarID: a.ID.String(),
+		S3Keys:   keys,
+	})
+}
+
 func (s *AvatarService) publishUploaded(ctx context.Context, a *domain.Avatar) error {
-	body, err := json.Marshal(broker.AvatarUploadEvent{
+	return s.publish(ctx, broker.TypeAvatarUploaded, a.ID, broker.AvatarUploadEvent{
 		AvatarID: a.ID.String(),
 		UserID:   a.UserID,
 		S3Key:    a.S3Key,
 	})
+}
+
+// publish отправляет событие eventType с новым message_id и ключом avatarID.
+func (s *AvatarService) publish(ctx context.Context, eventType string, avatarID uuid.UUID, event any) error {
+	body, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("marshal %s event: %w", broker.TypeAvatarUploaded, err)
+		return fmt.Errorf("marshal %s event: %w", eventType, err)
 	}
 
 	err = s.publisher.Publish(ctx, broker.Message{
 		ID:   uuid.NewString(),
-		Type: broker.TypeAvatarUploaded,
-		Key:  a.ID.String(),
+		Type: eventType,
+		Key:  avatarID.String(),
 		Body: body,
 	})
 	if err != nil {
-		return fmt.Errorf("publish %s: %w", broker.TypeAvatarUploaded, err)
+		return fmt.Errorf("publish %s: %w", eventType, err)
 	}
 	return nil
 }

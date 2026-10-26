@@ -22,6 +22,9 @@ const (
 	SizeOriginal = "original"
 )
 
+// ThumbnailSizes — все миниатюры, которые создаёт worker, от маленькой к большой.
+var ThumbnailSizes = []string{ThumbnailSize100, ThumbnailSize300}
+
 // ThumbnailMimeType — формат всех миниатюр: worker сохраняет их в JPEG.
 const ThumbnailMimeType = "image/jpeg"
 

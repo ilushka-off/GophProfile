@@ -37,6 +37,7 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 		r.Post("/avatars", avatarHandler.Upload)
 		r.Get("/avatars/{avatar_id}", avatarHandler.Get)
 		r.Get("/avatars/{avatar_id}/metadata", avatarHandler.Metadata)
+		r.Delete("/avatars/{avatar_id}", avatarHandler.Delete)
 		r.Get("/users/{user_id}/avatar", avatarHandler.GetCurrent)
 		r.Get("/users/{user_id}/avatars", avatarHandler.List)
 	})

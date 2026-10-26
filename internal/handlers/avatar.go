@@ -63,6 +63,7 @@ type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
 	Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, error)
 	ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error)
+	Delete(ctx context.Context, userID string, id uuid.UUID) error
 	ResolveFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error)
 	ResolveCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*services.File, error)
 	Open(ctx context.Context, f *services.File) (*domain.Object, error)
@@ -111,13 +112,10 @@ type thumbnailResponse struct {
 	URL  string `json:"url"`
 }
 
-// thumbnailSizes — порядок миниатюр в ответе: от маленькой к большой.
-var thumbnailSizes = []string{domain.ThumbnailSize100, domain.ThumbnailSize300}
-
 func newMetadataResponse(a *domain.Avatar) metadataResponse {
 	// В thumbnails только готовые миниатюры. Пустой слайс, а не nil: в JSON нужен [], а не null.
-	thumbnails := make([]thumbnailResponse, 0, len(thumbnailSizes))
-	for _, size := range thumbnailSizes {
+	thumbnails := make([]thumbnailResponse, 0, len(domain.ThumbnailSizes))
+	for _, size := range domain.ThumbnailSizes {
 		if _, ok := a.ThumbnailS3Keys[size]; ok {
 			thumbnails = append(thumbnails, thumbnailResponse{
 				Size: size,
@@ -259,6 +257,25 @@ func (h *AvatarHandler) List(w http.ResponseWriter, r *http.Request) {
 		resp.Items = append(resp.Items, newMetadataResponse(&avatars[i]))
 	}
 	httpx.WriteJSON(w, http.StatusOK, resp)
+}
+
+// Delete — DELETE /api/v1/avatars/{avatar_id}: мягко удаляет свою аватарку
+// и отвечает 204. Файлы из S3 удалит worker.
+func (h *AvatarHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	id, ok := parseAvatarID(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), userID, id); err != nil {
+		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GetCurrent — GET /api/v1/users/{user_id}/avatar?size=&format=: как Get,
