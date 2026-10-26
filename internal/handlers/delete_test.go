@@ -20,6 +20,51 @@ func (f *fakeAvatarService) Delete(_ context.Context, userID string, id uuid.UUI
 	return f.err
 }
 
+func (f *fakeAvatarService) DeleteCurrent(_ context.Context, actorID, userID string) error {
+	f.called = true
+	f.gotActorID = actorID
+	f.gotUserID = userID
+	return f.err
+}
+
+func TestAvatarHandlerDeleteCurrent(t *testing.T) {
+	tests := []struct {
+		name       string
+		userID     string
+		err        error
+		wantStatus int
+		wantCalled bool
+	}{
+		{"deleted", "user-42", nil, http.StatusNoContent, true},
+		{"no user id", "", nil, http.StatusBadRequest, false},
+		{"other user", "user-7", domain.ErrForbidden, http.StatusForbidden, true},
+		{"no avatars", "user-42", domain.ErrNotFound, http.StatusNotFound, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{err: tt.err}
+			h := NewAvatarHandler(svc, testMaxUploadSize, discardLogger())
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/users/user-42/avatar", nil)
+			if tt.userID != "" {
+				req.Header.Set(headerUserID, tt.userID)
+			}
+
+			rec := serveRoute(http.MethodDelete, "/api/v1/users/{user_id}/avatar", h.DeleteCurrent, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d, body %s", rec.Code, tt.wantStatus, rec.Body)
+			}
+			if svc.called != tt.wantCalled {
+				t.Fatalf("service called = %v, want %v", svc.called, tt.wantCalled)
+			}
+			if tt.wantCalled && (svc.gotActorID != tt.userID || svc.gotUserID != "user-42") {
+				t.Errorf("service got (%q, %q), want (%q, user-42)", svc.gotActorID, svc.gotUserID, tt.userID)
+			}
+		})
+	}
+}
+
 func deleteAvatar(svc *fakeAvatarService, path, userID string) *httptest.ResponseRecorder {
 	h := NewAvatarHandler(svc, testMaxUploadSize, discardLogger())
 	req := httptest.NewRequest(http.MethodDelete, path, nil)

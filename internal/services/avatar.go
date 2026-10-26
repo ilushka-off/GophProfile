@@ -273,6 +273,20 @@ func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID)
 	return s.softDelete(ctx, a)
 }
 
+// DeleteCurrent удаляет текущую аватарку пользователя userID от имени actorID,
+// как Delete. Удалять можно только у себя: actorID ≠ userID — domain.ErrForbidden.
+// Аватарок нет — domain.ErrNotFound.
+func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID string) error {
+	if actorID != userID {
+		return domain.ErrForbidden
+	}
+	a, err := s.repo.GetCurrentByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	return s.softDelete(ctx, a)
+}
+
 // softDelete помечает аватарку удалённой и публикует avatar.deleted. Если
 // публикация не удалась, строка остаётся удалённой, а файлы — в S3: клиент
 // получит 500, а файлы можно убрать повторной публикацией.

@@ -40,6 +40,7 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 		r.Delete("/avatars/{avatar_id}", avatarHandler.Delete)
 		r.Get("/users/{user_id}/avatar", avatarHandler.GetCurrent)
 		r.Get("/users/{user_id}/avatars", avatarHandler.List)
+		r.Delete("/users/{user_id}/avatar", avatarHandler.DeleteCurrent)
 	})
 
 	return r

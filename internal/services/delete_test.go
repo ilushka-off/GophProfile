@@ -98,6 +98,41 @@ func TestAvatarServiceDelete(t *testing.T) {
 	checkDeleteEvent(t, d.publisher.msgs)
 }
 
+func TestAvatarServiceDeleteCurrent(t *testing.T) {
+	d := newDeps()
+	d.repo.byID = ownedAvatar("user-42")
+
+	if err := d.svc.DeleteCurrent(context.Background(), "user-42", "user-42"); err != nil {
+		t.Fatalf("DeleteCurrent: %v", err)
+	}
+	if want := (calls{"repo.GetCurrentByUser", "repo.SoftDelete", "publisher.Publish"}); !slices.Equal(*d.log, want) {
+		t.Errorf("calls = %v, want %v", *d.log, want)
+	}
+	if d.repo.gotUserID != "user-42" || d.repo.softDeleted != testAvatarID {
+		t.Errorf("repo got user %q, deleted %s", d.repo.gotUserID, d.repo.softDeleted)
+	}
+	checkDeleteEvent(t, d.publisher.msgs)
+}
+
+func TestAvatarServiceDeleteCurrentFailures(t *testing.T) {
+	t.Run("other user", func(t *testing.T) {
+		d := newDeps()
+		if err := d.svc.DeleteCurrent(context.Background(), "user-7", "user-42"); !errors.Is(err, domain.ErrForbidden) {
+			t.Errorf("err = %v, want ErrForbidden", err)
+		}
+		if len(*d.log) != 0 {
+			t.Errorf("calls = %v, want none: foreign user must not touch the db", *d.log)
+		}
+	})
+	t.Run("no avatars", func(t *testing.T) {
+		d := newDeps()
+		d.repo.err = domain.ErrNotFound
+		if err := d.svc.DeleteCurrent(context.Background(), "user-42", "user-42"); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
 func TestAvatarServiceDeleteFailures(t *testing.T) {
 	errDB := errors.New("db down")
 

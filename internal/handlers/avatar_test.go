@@ -36,8 +36,9 @@ type fakeAvatarService struct {
 	gotInput  services.UploadInput
 	gotBody   []byte
 	gotID     uuid.UUID
-	gotUserID string
-	gotOpts   services.FileOptions
+	gotUserID  string
+	gotActorID string
+	gotOpts    services.FileOptions
 }
 
 // closeTracker — тело объекта S3, которое запоминает, что его закрыли.

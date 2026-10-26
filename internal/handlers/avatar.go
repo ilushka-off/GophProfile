@@ -64,6 +64,7 @@ type AvatarService interface {
 	Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, error)
 	ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error)
 	Delete(ctx context.Context, userID string, id uuid.UUID) error
+	DeleteCurrent(ctx context.Context, actorID, userID string) error
 	ResolveFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error)
 	ResolveCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*services.File, error)
 	Open(ctx context.Context, f *services.File) (*domain.Object, error)
@@ -272,6 +273,21 @@ func (h *AvatarHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Delete(r.Context(), userID, id); err != nil {
+		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteCurrent — DELETE /api/v1/users/{user_id}/avatar: удаляет текущую
+// аватарку пользователя. X-User-ID должен совпадать с user_id, иначе 403.
+func (h *AvatarHandler) DeleteCurrent(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.svc.DeleteCurrent(r.Context(), actorID, chi.URLParam(r, urlParamUserID)); err != nil {
 		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
 		return
 	}
