@@ -192,10 +192,11 @@ func (h *AvatarHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	avatar, err := h.svc.Upload(r.Context(), services.UploadInput{
-		UserID:   userID,
-		FileName: header.Filename,
-		File:     file,
-		Size:     header.Size,
+		UserID:      userID,
+		FileName:    header.Filename,
+		File:        file,
+		Size:        header.Size,
+		ContentType: header.Header.Get("Content-Type"),
 	})
 	if err != nil {
 		writeServiceError(w, r, h.logger, err, h.maxUploadSize)

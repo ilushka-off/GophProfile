@@ -109,10 +109,11 @@ func (h *WebHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	_, err = h.svc.Upload(r.Context(), services.UploadInput{
-		UserID:   userID,
-		FileName: header.Filename,
-		File:     file,
-		Size:     header.Size,
+		UserID:      userID,
+		FileName:    header.Filename,
+		File:        file,
+		Size:        header.Size,
+		ContentType: header.Header.Get("Content-Type"),
 	})
 	if err != nil {
 		status, resp := serviceErrorResponse(err, h.maxUploadSize)

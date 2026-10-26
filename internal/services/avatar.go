@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,7 +12,9 @@ import (
 	_ "image/jpeg" // декодер для image.DecodeConfig и image.Decode
 	_ "image/png"  // декодер для image.DecodeConfig и image.Decode
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	_ "golang.org/x/image/webp" // декодер для image.DecodeConfig и image.Decode
@@ -27,12 +30,35 @@ const sniffLen = 512
 // maxFileNameLength — длина file_name в таблице avatars.
 const maxFileNameLength = 255
 
-// supportedFormats — поддерживаемые MIME-типы и расширения оригинала в S3.
-var supportedFormats = map[string]string{
-	"image/jpeg": "jpg",
-	"image/png":  "png",
-	"image/webp": "webp",
+// imageFormat — поддерживаемый формат оригинала.
+type imageFormat struct {
+	// ext — расширение оригинала в S3.
+	ext string
+	// decoder — имя формата, которое возвращает image.DecodeConfig.
+	decoder string
+	// magic проверяет сигнатуру файла.
+	magic func(header []byte) bool
 }
+
+// supportedFormats — поддерживаемые форматы по MIME-типу.
+var supportedFormats = map[string]imageFormat{
+	"image/jpeg": {ext: "jpg", decoder: "jpeg", magic: func(h []byte) bool {
+		return bytes.HasPrefix(h, []byte{0xFF, 0xD8, 0xFF})
+	}},
+	"image/png": {ext: "png", decoder: "png", magic: func(h []byte) bool {
+		return bytes.HasPrefix(h, []byte("\x89PNG\r\n\x1a\n"))
+	}},
+	"image/webp": {ext: "webp", decoder: "webp", magic: func(h []byte) bool {
+		return len(h) >= 12 && bytes.Equal(h[0:4], []byte("RIFF")) && bytes.Equal(h[8:12], []byte("WEBP"))
+	}},
+}
+
+// maxPixels — предел ширина × высота. Маленький по размеру файл может
+// разворачиваться в огромную картинку: worker декодирует её целиком в память.
+const maxPixels = 50_000_000
+
+// mimeOctetStream — Content-Type, который клиенты ставят, когда не знают тип файла.
+const mimeOctetStream = "application/octet-stream"
 
 // AvatarRepository — хранилище метаданных аватарок, которое нужно сервису.
 type AvatarRepository interface {
@@ -79,6 +105,9 @@ type UploadInput struct {
 	FileName string
 	File     io.ReadSeeker
 	Size     int64
+	// ContentType — тип файла, заявленный клиентом в части multipart. Ему не
+	// доверяют, но если он задан и не совпадает с содержимым — это отказ.
+	ContentType string
 }
 
 // Upload сохраняет оригинал в S3, строку в БД со статусом pending и публикует
@@ -89,14 +118,18 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 		return nil, domain.ErrTooLarge
 	}
 
-	mimeType, ext, err := detectFormat(in.File)
+	mimeType, format, err := detectFormat(in.File)
 	if err != nil {
 		return nil, err
 	}
-	width, height, err := decodeDimensions(in.File)
+	if err := checkDeclaredType(in.ContentType, mimeType); err != nil {
+		return nil, err
+	}
+	width, height, err := decodeDimensions(in.File, format)
 	if err != nil {
 		return nil, err
 	}
+	ext := format.ext
 	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("rewind file: %w", err)
 	}
@@ -337,36 +370,58 @@ func (s *AvatarService) publish(ctx context.Context, eventType string, avatarID 
 }
 
 // detectFormat определяет формат по первым байтам файла, а не по имени
-// или Content-Type от клиента. Неподдерживаемый формат — domain.ErrInvalidFormat.
-func detectFormat(r io.ReadSeeker) (mimeType, ext string, err error) {
+// или Content-Type от клиента, и дополнительно сверяет сигнатуру формата.
+// Неподдерживаемый формат — domain.ErrInvalidFormat.
+func detectFormat(r io.ReadSeeker) (string, imageFormat, error) {
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return "", "", fmt.Errorf("rewind file: %w", err)
+		return "", imageFormat{}, fmt.Errorf("rewind file: %w", err)
 	}
 
 	buf := make([]byte, sniffLen)
 	n, err := io.ReadFull(r, buf)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return "", "", fmt.Errorf("read file header: %w", err)
+		return "", imageFormat{}, fmt.Errorf("read file header: %w", err)
 	}
 
-	mimeType = http.DetectContentType(buf[:n])
-	ext, ok := supportedFormats[mimeType]
-	if !ok {
-		return "", "", domain.ErrInvalidFormat
+	mimeType := http.DetectContentType(buf[:n])
+	format, ok := supportedFormats[mimeType]
+	if !ok || !format.magic(buf[:n]) {
+		return "", imageFormat{}, domain.ErrInvalidFormat
 	}
-	return mimeType, ext, nil
+	return mimeType, format, nil
+}
+
+// checkDeclaredType сверяет Content-Type, заявленный клиентом, с настоящим
+// типом файла. Пустой и application/octet-stream ничего не утверждают.
+func checkDeclaredType(declared, actual string) error {
+	mediaType, _, err := mime.ParseMediaType(declared)
+	if declared == "" || (err == nil && mediaType == mimeOctetStream) {
+		return nil
+	}
+	if err != nil || !strings.EqualFold(mediaType, actual) {
+		return &domain.ValidationError{Details: fmt.Sprintf("file content is %s, but Content-Type is %q", actual, declared)}
+	}
+	return nil
 }
 
 // decodeDimensions читает размер картинки из заголовка, не декодируя её целиком.
-// Файл с правильной сигнатурой, но битым заголовком — domain.ErrInvalidFormat.
-func decodeDimensions(r io.ReadSeeker) (width, height int, err error) {
+// Битый заголовок или заголовок другого формата — domain.ErrInvalidFormat,
+// слишком большая картинка — ошибка валидации.
+func decodeDimensions(r io.ReadSeeker, format imageFormat) (width, height int, err error) {
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return 0, 0, fmt.Errorf("rewind file: %w", err)
 	}
 
-	cfg, _, err := image.DecodeConfig(r)
+	cfg, decoder, err := image.DecodeConfig(r)
 	if err != nil {
 		return 0, 0, fmt.Errorf("%w: decode image config: %w", domain.ErrInvalidFormat, err)
+	}
+	if decoder != format.decoder {
+		return 0, 0, fmt.Errorf("%w: decoded as %s, want %s", domain.ErrInvalidFormat, decoder, format.decoder)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return 0, 0, &domain.ValidationError{Details: fmt.Sprintf(
+			"image is %dx%d, at most %d megapixels are allowed", cfg.Width, cfg.Height, maxPixels/1_000_000)}
 	}
 	return cfg.Width, cfg.Height, nil
 }
