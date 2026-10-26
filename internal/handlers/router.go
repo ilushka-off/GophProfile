@@ -29,14 +29,22 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 
 	r.Get("/health", healthHandler.Check)
 
+	// Тело запроса ограничено лимитом файла плюс запас на multipart: большой
+	// запрос отклоняется по Content-Length, не доходя до хендлера.
 	r.Get("/", webHandler.Root)
 	r.Route("/web", func(r chi.Router) {
+		r.Use(middleware.MaxBodySize(webHandler.maxUploadSize+multipartOverhead, func(w http.ResponseWriter, r *http.Request) {
+			webHandler.renderUploadError(w, r, "", http.StatusRequestEntityTooLarge, webHandler.tooLargeMessage())
+		}))
 		r.Get("/upload", webHandler.UploadForm)
 		r.Post("/upload", webHandler.Upload)
 		r.Get("/gallery/{user_id}", webHandler.Gallery)
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(middleware.MaxBodySize(avatarHandler.maxUploadSize+multipartOverhead, func(w http.ResponseWriter, _ *http.Request) {
+			writeTooLarge(w, avatarHandler.maxUploadSize)
+		}))
 		r.Post("/avatars", avatarHandler.Upload)
 		r.Get("/avatars/{avatar_id}", avatarHandler.Get)
 		r.Get("/avatars/{avatar_id}/metadata", avatarHandler.Metadata)

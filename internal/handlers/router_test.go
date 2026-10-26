@@ -46,3 +46,38 @@ func TestRouter(t *testing.T) {
 		})
 	}
 }
+
+// Запрос с заявленным телом больше лимита отклоняется middleware: сервис не вызывается.
+func TestRouterRejectsLargeBodies(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		header   string
+		wantBody string
+	}{
+		{"api answers json", "/api/v1/avatars", "user-42", `{"error":"File too large","max_size":1024}`},
+		{"web answers the form", "/web/upload", "", "File too large: max 1.0 KB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeAvatarService{}
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader("x"))
+			req.ContentLength = testMaxUploadSize + multipartOverhead + 1
+			req.Header.Set(headerUserID, tt.header)
+
+			rec := httptest.NewRecorder()
+			newTestRouter(svc).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("status = %d, want 413", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantBody) {
+				t.Errorf("body = %q, want it to contain %q", rec.Body.String(), tt.wantBody)
+			}
+			if svc.called {
+				t.Error("service was called for an oversized request")
+			}
+		})
+	}
+}
