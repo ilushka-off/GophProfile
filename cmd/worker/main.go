@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/repository/postgres"
@@ -58,8 +59,14 @@ func run() error {
 	}()
 
 	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), storage, logger)
+	// Порядок обёрток: временные ошибки повторяются (1, 2, 4 с) вместе с проверкой
+	// message_id; если повторы кончились или ошибка постоянная, аватарка
+	// получает статус failed, а consumer отправляет сообщение в DLQ.
 	handler := processor.MarkFailed(
-		worker.Deduplicate(postgres.NewMessageLog(pool), logger, processor.Handle),
+		broker.WithRetry(
+			worker.Deduplicate(postgres.NewMessageLog(pool), logger, processor.Handle),
+			broker.DefaultRetryDelays, logger,
+		),
 	)
 
 	slog.Info("starting worker", "broker", cfg.Broker.Kind)
