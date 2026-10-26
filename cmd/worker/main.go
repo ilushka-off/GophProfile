@@ -7,13 +7,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
+	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/storage/s3"
+	"go-avatar-service/internal/worker"
 )
-
-// heartbeatInterval — как часто worker пишет в лог, что жив.
-const heartbeatInterval = 10 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -22,6 +22,8 @@ func main() {
 	}
 }
 
+// run подключается к БД, S3 и брокеру и обрабатывает события до SIGTERM.
+// Миграции применяет server, поэтому worker стартует после него.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -34,18 +36,34 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	slog.Info("starting worker", "broker", cfg.Broker.Kind)
-
-	ticker := time.NewTicker(heartbeatInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("shutting down worker")
-			return nil
-		case <-ticker.C:
-			slog.Debug("worker is running")
-		}
+	pool, err := postgres.OpenPool(ctx, cfg.DatabaseURI)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
 	}
+	defer pool.Close()
+
+	storage, err := s3.New(cfg.S3)
+	if err != nil {
+		return fmt.Errorf("create storage: %w", err)
+	}
+
+	consumer, err := factory.NewConsumer(cfg.Broker, logger)
+	if err != nil {
+		return fmt.Errorf("connect to broker: %w", err)
+	}
+	defer func() {
+		if err := consumer.Close(); err != nil {
+			slog.Warn("close broker consumer", "err", err)
+		}
+	}()
+
+	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), storage, logger)
+	handler := processor.MarkFailed(processor.Handle)
+
+	slog.Info("starting worker", "broker", cfg.Broker.Kind)
+	if err := consumer.Consume(ctx, handler); err != nil {
+		return fmt.Errorf("consume: %w", err)
+	}
+	slog.Info("shutting down worker")
+	return nil
 }

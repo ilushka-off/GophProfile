@@ -132,6 +132,41 @@ func (r *AvatarRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+// SetProcessingStatus меняет processing_status неудалённой аватарки.
+// Если её нет или она удалена, возвращает domain.ErrNotFound.
+func (r *AvatarRepository) SetProcessingStatus(ctx context.Context, id uuid.UUID, status domain.ProcessingStatus) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE avatars
+		SET processing_status = $2, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL`, id, status)
+	if err != nil {
+		return fmt.Errorf("set processing status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// CompleteProcessing добавляет ключи миниатюр к thumbnail_s3_keys (размеры,
+// которых нет в thumbnails, остаются как были) и ставит processing_status = completed.
+// Если аватарку успели удалить, возвращает domain.ErrNotFound.
+func (r *AvatarRepository) CompleteProcessing(ctx context.Context, id uuid.UUID, thumbnails map[string]string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE avatars
+		SET thumbnail_s3_keys = COALESCE(thumbnail_s3_keys, '{}'::jsonb) || $2::jsonb,
+			processing_status = $3,
+			updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL`, id, thumbnails, domain.ProcessingStatusCompleted)
+	if err != nil {
+		return fmt.Errorf("complete processing: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // scanAvatar читает строку с колонками avatarColumns.
 func scanAvatar(row pgx.Row) (*domain.Avatar, error) {
 	var a domain.Avatar
