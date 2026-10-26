@@ -139,6 +139,12 @@ func (s *AvatarService) Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, 
 	return s.repo.GetByID(ctx, id)
 }
 
+// ListByUser возвращает неудалённые аватарки пользователя, новые сверху.
+// Пользователь без аватарок — не ошибка, а пустой слайс.
+func (s *AvatarService) ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error) {
+	return s.repo.ListByUser(ctx, userID)
+}
+
 // FileOptions — какую картинку отдать. Значения уже проверены хендлером.
 type FileOptions struct {
 	// Size — domain.ThumbnailSize100, domain.ThumbnailSize300 или domain.SizeOriginal.

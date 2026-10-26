@@ -62,6 +62,7 @@ var formatMimeTypes = map[string]string{
 type AvatarService interface {
 	Upload(ctx context.Context, in services.UploadInput) (*domain.Avatar, error)
 	Get(ctx context.Context, id uuid.UUID) (*domain.Avatar, error)
+	ListByUser(ctx context.Context, userID string) ([]domain.Avatar, error)
 	ResolveFile(ctx context.Context, id uuid.UUID, opts services.FileOptions) (*services.File, error)
 	ResolveCurrentFile(ctx context.Context, userID string, opts services.FileOptions) (*services.File, error)
 	Open(ctx context.Context, f *services.File) (*domain.Object, error)
@@ -137,6 +138,11 @@ func newMetadataResponse(a *domain.Avatar) metadataResponse {
 		CreatedAt:  apiTime(a.CreatedAt),
 		UpdatedAt:  apiTime(a.UpdatedAt),
 	}
+}
+
+// listResponse — ответ со списком: {"items": [...]}.
+type listResponse struct {
+	Items []metadataResponse `json:"items"`
 }
 
 // avatarURL — путь, по которому отдаётся картинка аватарки.
@@ -237,6 +243,22 @@ func (h *AvatarHandler) Metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, newMetadataResponse(a))
+}
+
+// List — GET /api/v1/users/{user_id}/avatars: все неудалённые аватарки
+// пользователя, новые сверху. Нет аватарок — {"items": []}.
+func (h *AvatarHandler) List(w http.ResponseWriter, r *http.Request) {
+	avatars, err := h.svc.ListByUser(r.Context(), chi.URLParam(r, urlParamUserID))
+	if err != nil {
+		writeServiceError(w, r, h.logger, err, h.maxUploadSize)
+		return
+	}
+
+	resp := listResponse{Items: make([]metadataResponse, 0, len(avatars))}
+	for i := range avatars {
+		resp.Items = append(resp.Items, newMetadataResponse(&avatars[i]))
+	}
+	httpx.WriteJSON(w, http.StatusOK, resp)
 }
 
 // GetCurrent — GET /api/v1/users/{user_id}/avatar?size=&format=: как Get,

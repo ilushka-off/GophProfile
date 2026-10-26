@@ -23,8 +23,9 @@ const testMaxUploadSize = 1 << 10 // 1 KiB, чтобы не гонять в те
 
 // fakeAvatarService запоминает, что пришло в Upload, и отвечает заданными avatar и err.
 type fakeAvatarService struct {
-	avatar *domain.Avatar
-	obj    *domain.Object
+	avatar  *domain.Avatar
+	avatars []domain.Avatar
+	obj     *domain.Object
 	file   *services.File
 	err    error
 	// openErr — ошибка Open: файл найден в БД, но не открылся.
