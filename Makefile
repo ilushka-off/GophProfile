@@ -11,7 +11,7 @@ BROKER         ?= rabbitmq
 # golangci-lint v2 собран под Go 1.26+; версия закреплена, чтобы у всех были одни правила.
 GOLANGCI_LINT  ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
-COMPOSE := docker compose --env-file $(ENV_FILE) -f docker/docker-compose.yaml --profile $(BROKER)
+COMPOSE := docker compose --env-file $(ENV_FILE) --profile $(BROKER)
 
 .PHONY: help build run run-worker test test-short cover lint migrate migrate-down up down logs
 
@@ -56,5 +56,5 @@ up: ## Поднять окружение в docker compose (BROKER=rabbitmq|kafk
 down: ## Остановить окружение
 	$(COMPOSE) down
 
-logs: ## Логи app
-	$(COMPOSE) logs -f app
+logs: ## Логи server и worker
+	$(COMPOSE) logs -f server-$(BROKER) worker-$(BROKER)
