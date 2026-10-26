@@ -110,3 +110,29 @@ func TestRouterRateLimit(t *testing.T) {
 		}
 	}
 }
+
+// Preflight перехватывается до роутинга: маршрутов OPTIONS в роутере нет.
+func TestRouterCORSPreflight(t *testing.T) {
+	router := NewRouter(discardLogger(), RouterOptions{CORSAllowedOrigins: []string{"https://app.example"}},
+		healthyHandler(),
+		NewAvatarHandler(&fakeAvatarService{}, testMaxUploadSize, discardLogger()),
+		newTestWebHandler(&fakeAvatarService{}),
+	)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/avatars/0b6c6c9e-5f0e-4a35-9a43-7f3b1c2d9e10", nil)
+	req.Header.Set("Origin", "https://app.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodDelete)
+	req.Header.Set("Access-Control-Request-Headers", "x-user-id")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example" {
+		t.Errorf("Allow-Origin = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-User-ID") {
+		t.Errorf("Allow-Headers = %q, want X-User-ID", got)
+	}
+}

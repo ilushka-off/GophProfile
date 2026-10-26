@@ -24,8 +24,9 @@ func setBaseEnv(t *testing.T) {
 		"BROKER":          "",
 		"KAFKA_BROKERS":   "",
 
-		"RATE_LIMIT_RPS":   "",
-		"RATE_LIMIT_BURST": "",
+		"RATE_LIMIT_RPS":       "",
+		"RATE_LIMIT_BURST":     "",
+		"CORS_ALLOWED_ORIGINS": "",
 	} {
 		t.Setenv(k, v)
 	}
@@ -69,6 +70,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("KAFKA_BROKERS", "k1:9092, k2:9092,")
 	t.Setenv("RATE_LIMIT_RPS", "0.5")
 	t.Setenv("RATE_LIMIT_BURST", "3")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example, http://localhost:3000,")
 
 	cfg, err := Load()
 	if err != nil {
@@ -93,6 +95,9 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.RateLimit != (RateLimitConfig{RPS: 0.5, Burst: 3}) {
 		t.Errorf("RateLimit = %+v", cfg.RateLimit)
 	}
+	if want := []string{"https://app.example", "http://localhost:3000"}; !reflect.DeepEqual(cfg.CORSAllowedOrigins, want) {
+		t.Errorf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -114,6 +119,8 @@ func TestLoadErrors(t *testing.T) {
 		{name: "bad rate limit", env: map[string]string{"RATE_LIMIT_RPS": "fast"}},
 		{name: "negative rate limit", env: map[string]string{"RATE_LIMIT_RPS": "-1"}},
 		{name: "zero burst", env: map[string]string{"RATE_LIMIT_BURST": "0"}},
+		{name: "origin with path", env: map[string]string{"CORS_ALLOWED_ORIGINS": "https://app.example/"}},
+		{name: "origin without scheme", env: map[string]string{"CORS_ALLOWED_ORIGINS": "app.example"}},
 	}
 
 	for _, tt := range tests {

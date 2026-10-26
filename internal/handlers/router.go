@@ -17,6 +17,8 @@ type RouterOptions struct {
 	// и /web. RateLimitRPS = 0 — без ограничения.
 	RateLimitRPS   float64
 	RateLimitBurst int
+	// CORSAllowedOrigins — origins, которым браузер разрешает запросы. Пусто — CORS выключен.
+	CORSAllowedOrigins []string
 }
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
@@ -27,6 +29,8 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.Recoverer(logger))
+	// CORS до роутинга: на preflight OPTIONS chi иначе ответил бы 405.
+	r.Use(middleware.CORS(opts.CORSAllowedOrigins))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		httpx.WriteError(w, http.StatusNotFound, msgRouteNotFound, "")

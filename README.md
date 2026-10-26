@@ -80,6 +80,7 @@ server и worker читают одни и те же переменные.
 | `KAFKA_BROKERS` | — (для `kafka`) | Список брокеров через запятую |
 | `RATE_LIMIT_RPS` | `20` | Запросов в секунду с одного IP к `/api/v1` и `/web`; `0` — без ограничения. Сверх лимита — 429 с `Retry-After` |
 | `RATE_LIMIT_BURST` | `40` | Сколько запросов подряд можно сделать сверх средней скорости |
+| `CORS_ALLOWED_ORIGINS` | пусто | Origins через запятую (`https://app.example`) или `*`, которым браузер разрешает запросы к API. Пусто — CORS выключен |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
 `APP_PORT` из `.env.example` настраивают контейнеры docker compose.

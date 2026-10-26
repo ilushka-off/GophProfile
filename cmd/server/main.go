@@ -91,8 +91,9 @@ func run() error {
 
 	router := handlers.NewRouter(logger,
 		handlers.RouterOptions{
-			RateLimitRPS:   cfg.RateLimit.RPS,
-			RateLimitBurst: cfg.RateLimit.Burst,
+			RateLimitRPS:       cfg.RateLimit.RPS,
+			RateLimitBurst:     cfg.RateLimit.Burst,
+			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 		},
 		handlers.NewHealthHandler(pool, storage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),

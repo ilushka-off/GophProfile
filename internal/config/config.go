@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -36,6 +37,10 @@ type Config struct {
 	S3        S3Config
 	Broker    BrokerConfig
 	RateLimit RateLimitConfig
+
+	// CORSAllowedOrigins — origins, которым браузер разрешает запросы к API
+	// (scheme://host[:port] или "*"). Пусто — CORS выключен.
+	CORSAllowedOrigins []string
 }
 
 // RateLimitConfig — ограничение частоты запросов с одного IP к API
@@ -112,15 +117,44 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	origins, err := loadCORSOrigins()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		HTTPAddr:      getEnv("HTTP_ADDR", defaultHTTPAddr),
-		LogLevel:      logLevel,
-		DatabaseURI:   databaseURI,
-		MaxUploadSize: maxUploadSize,
-		S3:            s3,
-		Broker:        broker,
-		RateLimit:     rateLimit,
+		HTTPAddr:           getEnv("HTTP_ADDR", defaultHTTPAddr),
+		LogLevel:           logLevel,
+		DatabaseURI:        databaseURI,
+		MaxUploadSize:      maxUploadSize,
+		S3:                 s3,
+		Broker:             broker,
+		RateLimit:          rateLimit,
+		CORSAllowedOrigins: origins,
 	}, nil
+}
+
+// loadCORSOrigins разбирает CORS_ALLOWED_ORIGINS: список через запятую.
+// Origin сравнивается с заголовком браузера побайтно, поэтому путь, слеш
+// в конце или опечатка в схеме сделали бы правило мёртвым — такие значения
+// отклоняются при старте.
+func loadCORSOrigins() ([]string, error) {
+	var origins []string
+	for _, o := range strings.Split(getEnv("CORS_ALLOWED_ORIGINS", ""), ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if o != "*" {
+			u, err := url.Parse(o)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+				u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+				return nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %q is not an origin like https://example.com", o)
+			}
+		}
+		origins = append(origins, o)
+	}
+	return origins, nil
 }
 
 func loadRateLimit() (RateLimitConfig, error) {
