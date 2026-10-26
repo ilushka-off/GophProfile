@@ -28,40 +28,89 @@ func (hangingPinger) Ping(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// fakeBucket реализует bucketChecker.
+type fakeBucket struct {
+	exists bool
+	err    error
+}
+
+func (f fakeBucket) BucketExists(context.Context) (bool, error) {
+	return f.exists, f.err
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// healthyHandler — HealthHandler, у которого все зависимости доступны.
+func healthyHandler() *HealthHandler {
+	return NewHealthHandler(fakePinger{}, fakeBucket{exists: true}, fakePinger{}, "rabbitmq", discardLogger())
+}
+
 func TestHealthHandlerCheck(t *testing.T) {
+	errRefused := errors.New("dial tcp: connection refused")
+
 	tests := []struct {
 		name       string
 		db         pinger
+		storage    bucketChecker
+		broker     pinger
 		wantStatus int
 		wantBody   string
 	}{
 		{
-			name:       "database reachable",
+			name:       "all reachable",
 			db:         fakePinger{},
+			storage:    fakeBucket{exists: true},
+			broker:     fakePinger{},
 			wantStatus: http.StatusOK,
-			wantBody:   `{"status":"ok","broker_type":"rabbitmq","components":{"database":"ok"}}`,
+			wantBody:   `{"status":"ok","broker_type":"rabbitmq","components":{"broker":"ok","database":"ok","storage":"ok"}}`,
 		},
 		{
 			name:       "database unavailable",
-			db:         fakePinger{err: errors.New("dial tcp: connection refused")},
+			db:         fakePinger{err: errRefused},
+			storage:    fakeBucket{exists: true},
+			broker:     fakePinger{},
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"database":"unavailable"}}`,
+			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"broker":"ok","database":"unavailable","storage":"ok"}}`,
 		},
 		{
 			name:       "database hangs past timeout",
 			db:         hangingPinger{},
+			storage:    fakeBucket{exists: true},
+			broker:     fakePinger{},
 			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"database":"unavailable"}}`,
+			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"broker":"ok","database":"unavailable","storage":"ok"}}`,
+		},
+		{
+			name:       "storage unavailable",
+			db:         fakePinger{},
+			storage:    fakeBucket{err: errRefused},
+			broker:     fakePinger{},
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"broker":"ok","database":"ok","storage":"unavailable"}}`,
+		},
+		{
+			name:       "bucket missing",
+			db:         fakePinger{},
+			storage:    fakeBucket{exists: false},
+			broker:     fakePinger{},
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"broker":"ok","database":"ok","storage":"unavailable"}}`,
+		},
+		{
+			name:       "broker unavailable",
+			db:         fakePinger{},
+			storage:    fakeBucket{exists: true},
+			broker:     fakePinger{err: errRefused},
+			wantStatus: http.StatusServiceUnavailable,
+			wantBody:   `{"status":"degraded","broker_type":"rabbitmq","components":{"broker":"unavailable","database":"ok","storage":"ok"}}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := NewHealthHandler(tt.db, "rabbitmq", discardLogger())
+			h := NewHealthHandler(tt.db, tt.storage, tt.broker, "rabbitmq", discardLogger())
 
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/health", nil)

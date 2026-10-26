@@ -10,7 +10,7 @@ import (
 // Логика /health проверяется в health_test.go, здесь — только что маршруты подключены.
 func TestRouter(t *testing.T) {
 	router := NewRouter(discardLogger(),
-		NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()),
+		healthyHandler(),
 		NewAvatarHandler(&fakeAvatarService{}, testMaxUploadSize, discardLogger()),
 	)
 

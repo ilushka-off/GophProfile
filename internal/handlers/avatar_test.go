@@ -26,16 +26,16 @@ type fakeAvatarService struct {
 	avatar  *domain.Avatar
 	avatars []domain.Avatar
 	obj     *domain.Object
-	file   *services.File
-	err    error
+	file    *services.File
+	err     error
 	// openErr — ошибка Open: файл найден в БД, но не открылся.
 	openErr error
 
-	called    bool
-	opened    bool
-	gotInput  services.UploadInput
-	gotBody   []byte
-	gotID     uuid.UUID
+	called     bool
+	opened     bool
+	gotInput   services.UploadInput
+	gotBody    []byte
+	gotID      uuid.UUID
 	gotUserID  string
 	gotActorID string
 	gotOpts    services.FileOptions
@@ -272,7 +272,7 @@ func TestAvatarHandlerUploadErrors(t *testing.T) {
 // getAvatar прогоняет GET через роутер, чтобы {avatar_id} разобрал chi.
 func getAvatar(svc *fakeAvatarService, path string) *httptest.ResponseRecorder {
 	router := NewRouter(discardLogger(),
-		NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()),
+		healthyHandler(),
 		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
 	)
 	rec := httptest.NewRecorder()
@@ -487,7 +487,7 @@ func TestAvatarHandlerGetCurrentNotFound(t *testing.T) {
 // getAvatarWith — как getAvatar, но с заголовками запроса.
 func getAvatarWith(svc *fakeAvatarService, path string, header http.Header) *httptest.ResponseRecorder {
 	router := NewRouter(discardLogger(),
-		NewHealthHandler(fakePinger{}, "rabbitmq", discardLogger()),
+		healthyHandler(),
 		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
 	)
 	req := httptest.NewRequest(http.MethodGet, path, nil)

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -22,11 +23,37 @@ const (
 	componentUnavailable = "unavailable"
 
 	componentDatabase = "database"
+	componentStorage  = "storage"
+	componentBroker   = "broker"
 )
+
+// errBucketNotFound — S3 отвечает, но бакета нет: загружать некуда.
+var errBucketNotFound = errors.New("bucket does not exist")
 
 // pinger — зависимость, доступность которой проверяет /health (например, пул БД).
 type pinger interface {
 	Ping(ctx context.Context) error
+}
+
+// bucketChecker — хранилище, которое умеет проверить свой бакет (клиент S3).
+type bucketChecker interface {
+	BucketExists(ctx context.Context) (bool, error)
+}
+
+// storagePinger проверяет S3 через BucketExists: доступен и бакет на месте.
+type storagePinger struct {
+	storage bucketChecker
+}
+
+func (p storagePinger) Ping(ctx context.Context) error {
+	exists, err := p.storage.BucketExists(ctx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errBucketNotFound
+	}
+	return nil
 }
 
 // component — проверяемая зависимость и имя, под которым она попадает в ответ.
@@ -36,7 +63,7 @@ type component struct {
 }
 
 // healthResponse — ответ /health:
-// {"status":"ok","broker_type":"rabbitmq","components":{"database":"ok"}}.
+// {"status":"ok","broker_type":"rabbitmq","components":{"broker":"ok","database":"ok","storage":"ok"}}.
 // Формат ошибок API здесь не используется.
 type healthResponse struct {
 	Status     string            `json:"status"`
@@ -51,13 +78,17 @@ type HealthHandler struct {
 	logger     *slog.Logger
 }
 
-// NewHealthHandler создаёт HealthHandler поверх pinger БД. brokerType — значение BROKER
-// из конфига (rabbitmq или kafka). Storage и broker добавятся сюда же отдельными компонентами.
-func NewHealthHandler(db pinger, brokerType string, logger *slog.Logger) *HealthHandler {
+// NewHealthHandler создаёт HealthHandler, который проверяет БД, S3 и брокер.
+// brokerType — значение BROKER из конфига (rabbitmq или kafka).
+func NewHealthHandler(db pinger, storage bucketChecker, broker pinger, brokerType string, logger *slog.Logger) *HealthHandler {
 	return &HealthHandler{
 		brokerType: brokerType,
-		components: []component{{name: componentDatabase, p: db}},
-		logger:     logger,
+		components: []component{
+			{name: componentDatabase, p: db},
+			{name: componentStorage, p: storagePinger{storage: storage}},
+			{name: componentBroker, p: broker},
+		},
+		logger: logger,
 	}
 }
 
