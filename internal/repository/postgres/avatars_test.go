@@ -238,8 +238,8 @@ func (s *RepositorySuite) TestMessageLog() {
 
 func ids(avatars []domain.Avatar) []uuid.UUID {
 	out := make([]uuid.UUID, 0, len(avatars))
-	for _, a := range avatars {
-		out = append(out, a.ID)
+	for i := range avatars {
+		out = append(out, avatars[i].ID)
 	}
 	return out
 }

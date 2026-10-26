@@ -366,7 +366,7 @@ func decodeDimensions(r io.ReadSeeker) (width, height int, err error) {
 
 	cfg, _, err := image.DecodeConfig(r)
 	if err != nil {
-		return 0, 0, fmt.Errorf("%w: decode image config: %v", domain.ErrInvalidFormat, err)
+		return 0, 0, fmt.Errorf("%w: decode image config: %w", domain.ErrInvalidFormat, err)
 	}
 	return cfg.Width, cfg.Height, nil
 }

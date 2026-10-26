@@ -60,7 +60,9 @@ func (p *Publisher) Publish(ctx context.Context, msg broker.Message) error {
 
 	if p.ch == nil || p.ch.IsClosed() {
 		p.logger.WarnContext(ctx, "rabbitmq channel is closed, reconnecting")
-		p.closeLocked()
+		if err := p.closeLocked(); err != nil {
+			p.logger.WarnContext(ctx, "close broken rabbitmq connection", "err", err)
+		}
 		if err := p.connect(); err != nil {
 			return err
 		}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
@@ -45,7 +44,6 @@ func startRabbit(t *testing.T) string {
 
 // collector — обработчик, который запоминает сообщения и отдаёт их в канал.
 type collector struct {
-	mu   sync.Mutex
 	seen chan broker.Message
 	fail func(broker.Message) error
 }

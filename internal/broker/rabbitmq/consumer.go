@@ -62,10 +62,11 @@ func (c *Consumer) consumeQueue(ctx context.Context, queue string, deliveries <-
 			return nil
 		case d, ok := <-deliveries:
 			if !ok {
-				if ctx.Err() != nil {
-					return nil
+				// Канал закрылся сам, а не из-за остановки — соединение с брокером потеряно.
+				if ctx.Err() == nil {
+					return fmt.Errorf("consume %s: %w", queue, errChannelClosed)
 				}
-				return fmt.Errorf("consume %s: %w", queue, errChannelClosed)
+				return nil
 			}
 			if err := c.handle(ctx, d, h); err != nil {
 				return err
@@ -83,7 +84,7 @@ func (c *Consumer) handle(ctx context.Context, d amqp.Delivery, h broker.Handler
 	err := h(ctx, msg)
 	if err != nil && ctx.Err() != nil {
 		// Остановка посреди обработки: не подтверждаем, брокер доставит заново.
-		return nil
+		return nil //nolint:nilerr // ошибка вызвана остановкой, это не сбой consumer'а
 	}
 	if err != nil {
 		c.logger.ErrorContext(ctx, "message failed, sending to dlq",

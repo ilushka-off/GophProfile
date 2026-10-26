@@ -111,7 +111,7 @@ func (g *groupHandler) handle(ctx context.Context, sess sarama.ConsumerGroupSess
 	err := g.handler(ctx, msg)
 	if err != nil && ctx.Err() != nil {
 		// Остановка или ребалансировка посреди обработки: offset не двигаем.
-		return nil
+		return nil //nolint:nilerr // ошибка вызвана остановкой, это не сбой consumer'а
 	}
 	if err != nil {
 		g.consumer.logger.ErrorContext(ctx, "message failed, sending to dlq",

@@ -8,6 +8,8 @@ MIGRATIONS_DIR := internal/repository/postgres/migrations
 COVER_FILE     := coverage.out
 COVER_MIN      := 50
 BROKER         ?= rabbitmq
+# golangci-lint v2 собран под Go 1.26+; версия закреплена, чтобы у всех были одни правила.
+GOLANGCI_LINT  ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
 COMPOSE := docker compose --env-file $(ENV_FILE) -f docker/docker-compose.yaml --profile $(BROKER)
 
@@ -39,8 +41,8 @@ cover: ## Тесты с отчётом о покрытии; падает, есл
 		if ($$3 + 0 < min) { printf "coverage %s%% is below %s%%\n", $$3, min; exit 1 } \
 		else printf "coverage %s%% >= %s%%\n", $$3, min }'
 
-lint: ## Запустить golangci-lint
-	golangci-lint run ./...
+lint: ## Запустить golangci-lint (конфиг .golangci.yml)
+	$(GOLANGCI_LINT) run ./...
 
 migrate: ## Применить миграции к DATABASE_URI
 	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URI)" up

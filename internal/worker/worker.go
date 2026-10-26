@@ -81,11 +81,11 @@ func (p *Processor) Handle(ctx context.Context, msg broker.Message) error {
 func (p *Processor) handleUploaded(ctx context.Context, msg broker.Message) error {
 	var ev broker.AvatarUploadEvent
 	if err := json.Unmarshal(msg.Body, &ev); err != nil {
-		return fmt.Errorf("%w: decode %s: %v", ErrBadMessage, msg.Type, err)
+		return fmt.Errorf("%w: decode %s: %w", ErrBadMessage, msg.Type, err)
 	}
 	id, err := uuid.Parse(ev.AvatarID)
 	if err != nil {
-		return fmt.Errorf("%w: avatar_id %q: %v", ErrBadMessage, ev.AvatarID, err)
+		return fmt.Errorf("%w: avatar_id %q: %w", ErrBadMessage, ev.AvatarID, err)
 	}
 
 	a, err := p.repo.GetByID(ctx, id)
@@ -109,11 +109,11 @@ func (p *Processor) handleUploaded(ctx context.Context, msg broker.Message) erro
 func (p *Processor) handleProcess(ctx context.Context, msg broker.Message) error {
 	var ev broker.AvatarProcessEvent
 	if err := json.Unmarshal(msg.Body, &ev); err != nil {
-		return fmt.Errorf("%w: decode %s: %v", ErrBadMessage, msg.Type, err)
+		return fmt.Errorf("%w: decode %s: %w", ErrBadMessage, msg.Type, err)
 	}
 	id, err := uuid.Parse(ev.AvatarID)
 	if err != nil {
-		return fmt.Errorf("%w: avatar_id %q: %v", ErrBadMessage, ev.AvatarID, err)
+		return fmt.Errorf("%w: avatar_id %q: %w", ErrBadMessage, ev.AvatarID, err)
 	}
 
 	sizes := domain.ThumbnailSizes
@@ -143,7 +143,7 @@ func (p *Processor) handleProcess(ctx context.Context, msg broker.Message) error
 func (p *Processor) handleDeleted(ctx context.Context, msg broker.Message) error {
 	var ev broker.AvatarDeleteEvent
 	if err := json.Unmarshal(msg.Body, &ev); err != nil {
-		return fmt.Errorf("%w: decode %s: %v", ErrBadMessage, msg.Type, err)
+		return fmt.Errorf("%w: decode %s: %w", ErrBadMessage, msg.Type, err)
 	}
 
 	for _, key := range ev.S3Keys {
@@ -209,7 +209,7 @@ func (p *Processor) makeThumbnails(ctx context.Context, a *domain.Avatar, sizes 
 func (p *Processor) downloadImage(ctx context.Context, key string) (image.Image, error) {
 	obj, err := p.storage.Download(ctx, key)
 	if errors.Is(err, domain.ErrObjectNotFound) {
-		return nil, fmt.Errorf("%w: original %s: %v", ErrBrokenImage, key, err)
+		return nil, fmt.Errorf("%w: original %s: %w", ErrBrokenImage, key, err)
 	}
 	if err != nil {
 		return nil, broker.Retryable(err)
@@ -218,7 +218,7 @@ func (p *Processor) downloadImage(ctx context.Context, key string) (image.Image,
 
 	img, _, err := image.Decode(obj.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: decode %s: %v", ErrBrokenImage, key, err)
+		return nil, fmt.Errorf("%w: decode %s: %w", ErrBrokenImage, key, err)
 	}
 	return img, nil
 }
