@@ -27,7 +27,7 @@ type Consumer struct {
 
 // NewConsumer подключается к RabbitMQ, объявляет топологию и ставит prefetch.
 func NewConsumer(url string, logger *slog.Logger) (*Consumer, error) {
-	conn, ch, err := dial(url)
+	conn, ch, err := dial(url, dialTimeout)
 	if err != nil {
 		return nil, err
 	}

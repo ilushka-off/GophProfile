@@ -33,8 +33,10 @@ var bindings = []struct {
 
 var errChannelClosed = errors.New("rabbitmq channel is closed")
 
-func dial(url string) (*amqp.Connection, *amqp.Channel, error) {
-	conn, err := amqp.DialConfig(url, amqp.Config{Dial: amqp.DefaultDial(dialTimeout)})
+// dial подключается к брокеру, открывает канал и объявляет топологию.
+// timeout ограничивает установку соединения.
+func dial(url string, timeout time.Duration) (*amqp.Connection, *amqp.Channel, error) {
+	conn, err := amqp.DialConfig(url, amqp.Config{Dial: amqp.DefaultDial(timeout)})
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial rabbitmq: %w", err)
 	}

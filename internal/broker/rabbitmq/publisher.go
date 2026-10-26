@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -18,7 +19,7 @@ var errNacked = errors.New("rabbitmq did not confirm the message")
 
 // Publisher публикует события в avatars.exchange с подтверждениями
 // (publisher confirms): Publish возвращается, когда брокер принял сообщение.
-// Если соединение порвалось, следующий Publish переподключается.
+// Если соединение порвалось, следующий Publish или Ping переподключается.
 type Publisher struct {
 	url    string
 	logger *slog.Logger
@@ -29,19 +30,21 @@ type Publisher struct {
 	mu   sync.Mutex
 	conn *amqp.Connection
 	ch   *amqp.Channel
+	// closed — Close уже вызван, переподключаться больше нельзя.
+	closed bool
 }
 
 // NewPublisher подключается к RabbitMQ и объявляет топологию.
 func NewPublisher(url string, logger *slog.Logger) (*Publisher, error) {
 	p := &Publisher{url: url, logger: logger}
-	if err := p.connect(); err != nil {
+	if err := p.connect(dialTimeout); err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
-func (p *Publisher) connect() error {
-	conn, ch, err := dial(p.url)
+func (p *Publisher) connect(timeout time.Duration) error {
+	conn, ch, err := dial(p.url, timeout)
 	if err != nil {
 		return err
 	}
@@ -58,14 +61,8 @@ func (p *Publisher) Publish(ctx context.Context, msg broker.Message) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.ch == nil || p.ch.IsClosed() {
-		p.logger.WarnContext(ctx, "rabbitmq channel is closed, reconnecting")
-		if err := p.closeLocked(); err != nil {
-			p.logger.WarnContext(ctx, "close broken rabbitmq connection", "err", err)
-		}
-		if err := p.connect(); err != nil {
-			return err
-		}
+	if err := p.ensureConnectedLocked(ctx, dialTimeout); err != nil {
+		return err
 	}
 
 	conf, err := p.ch.PublishWithDeferredConfirmWithContext(ctx, broker.ExchangeAvatars, msg.Type, false, false, toPublishing(msg))
@@ -82,15 +79,42 @@ func (p *Publisher) Publish(ctx context.Context, msg broker.Message) error {
 	return nil
 }
 
-// Ping проверяет, что соединение и канал открыты. Не переподключается,
-// чтобы /health отвечал быстро.
-func (p *Publisher) Ping(context.Context) error {
+// Ping проверяет, что соединение и канал открыты, а если нет — пробует
+// переподключиться. Иначе после рестарта брокера /health (и HEALTHCHECK
+// контейнера) отвечал бы 503, пока кто-нибудь не загрузит файл. Подключение
+// ограничено дедлайном ctx, чтобы /health отвечал быстро.
+func (p *Publisher) Ping(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.conn == nil || p.conn.IsClosed() || p.ch == nil || p.ch.IsClosed() {
+	timeout := dialTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
+	return p.ensureConnectedLocked(ctx, timeout)
+}
+
+// ensureConnectedLocked переподключается, если соединение или канал закрыты.
+// Вызывается под p.mu.
+func (p *Publisher) ensureConnectedLocked(ctx context.Context, timeout time.Duration) error {
+	if p.closed {
 		return errChannelClosed
 	}
+	if p.conn != nil && !p.conn.IsClosed() && p.ch != nil && !p.ch.IsClosed() {
+		return nil
+	}
+	if timeout <= 0 {
+		return errChannelClosed
+	}
+
+	p.logger.WarnContext(ctx, "rabbitmq channel is closed, reconnecting")
+	if err := p.closeLocked(); err != nil {
+		p.logger.WarnContext(ctx, "close broken rabbitmq connection", "err", err)
+	}
+	if err := p.connect(timeout); err != nil {
+		return err
+	}
+	p.logger.InfoContext(ctx, "reconnected to rabbitmq")
 	return nil
 }
 
@@ -98,6 +122,7 @@ func (p *Publisher) Ping(context.Context) error {
 func (p *Publisher) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	return p.closeLocked()
 }
 

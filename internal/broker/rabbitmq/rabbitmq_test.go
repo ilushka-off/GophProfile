@@ -165,6 +165,25 @@ func TestRabbitMQ(t *testing.T) {
 			t.Error("ping after close succeeded")
 		}
 	})
+
+	t.Run("ping reconnects after lost connection", func(t *testing.T) {
+		p, err := NewPublisher(url, discardLogger())
+		if err != nil {
+			t.Fatalf("new publisher: %v", err)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+
+		// Так выглядит рестарт брокера для клиента: соединение закрыто.
+		_ = p.conn.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		if err := p.Ping(ctx); err != nil {
+			t.Fatalf("ping after lost connection: %v", err)
+		}
+		if err := p.Publish(t.Context(), broker.Message{ID: "m-after", Type: broker.TypeAvatarDeleted, Key: "a3", Body: []byte(`{}`)}); err != nil {
+			t.Errorf("publish after reconnect: %v", err)
+		}
+	})
 }
 
 // getFromDLQ ждёт сообщение в avatars.dlq.
