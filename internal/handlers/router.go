@@ -11,9 +11,17 @@ import (
 	"go-avatar-service/internal/middleware"
 )
 
+// RouterOptions — настройки защитных middleware.
+type RouterOptions struct {
+	// RateLimitRPS и RateLimitBurst — лимит запросов с одного IP к /api/v1
+	// и /web. RateLimitRPS = 0 — без ограничения.
+	RateLimitRPS   float64
+	RateLimitBurst int
+}
+
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
 // /health и /web вне версии API и группу /api/v1 для эндпоинтов сервиса.
-func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler *AvatarHandler, webHandler *WebHandler) http.Handler {
+func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHandler, avatarHandler *AvatarHandler, webHandler *WebHandler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
@@ -27,12 +35,19 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 		httpx.WriteError(w, http.StatusMethodNotAllowed, msgMethodNotAllowed, "")
 	})
 
+	// /health не ограничивается: его дёргает healthcheck docker compose.
 	r.Get("/health", healthHandler.Check)
+
+	// Один лимитер на API и веб: у клиента одно ведро на весь сервис.
+	rateLimit := middleware.RateLimit(opts.RateLimitRPS, opts.RateLimitBurst, func(w http.ResponseWriter, _ *http.Request) {
+		httpx.WriteError(w, http.StatusTooManyRequests, msgTooManyRequests, "")
+	})
 
 	// Тело запроса ограничено лимитом файла плюс запас на multipart: большой
 	// запрос отклоняется по Content-Length, не доходя до хендлера.
 	r.Get("/", webHandler.Root)
 	r.Route("/web", func(r chi.Router) {
+		r.Use(rateLimit)
 		r.Use(middleware.MaxBodySize(webHandler.maxUploadSize+multipartOverhead, func(w http.ResponseWriter, r *http.Request) {
 			webHandler.renderUploadError(w, r, "", http.StatusRequestEntityTooLarge, webHandler.tooLargeMessage())
 		}))
@@ -42,6 +57,7 @@ func NewRouter(logger *slog.Logger, healthHandler *HealthHandler, avatarHandler 
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(rateLimit)
 		r.Use(middleware.MaxBodySize(avatarHandler.maxUploadSize+multipartOverhead, func(w http.ResponseWriter, _ *http.Request) {
 			writeTooLarge(w, avatarHandler.maxUploadSize)
 		}))

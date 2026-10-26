@@ -26,7 +26,7 @@ func newTestWebHandler(svc *fakeAvatarService) *WebHandler {
 
 // newTestRouter — роутер со всеми хендлерами поверх одного фейкового сервиса.
 func newTestRouter(svc *fakeAvatarService) http.Handler {
-	return NewRouter(discardLogger(),
+	return NewRouter(discardLogger(), RouterOptions{},
 		healthyHandler(),
 		NewAvatarHandler(svc, testMaxUploadSize, discardLogger()),
 		newTestWebHandler(svc),

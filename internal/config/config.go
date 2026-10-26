@@ -15,6 +15,9 @@ const (
 	defaultMaxUploadSize = 10 << 20 // 10 MiB
 	maxMaxUploadSize     = 10 << 20 // 10 MiB
 	defaultS3Region      = "us-east-1"
+
+	defaultRateLimitRPS   = 20
+	defaultRateLimitBurst = 40
 )
 
 // Поддерживаемые брокеры сообщений.
@@ -30,8 +33,18 @@ type Config struct {
 	DatabaseURI   string
 	MaxUploadSize int64
 
-	S3     S3Config
-	Broker BrokerConfig
+	S3        S3Config
+	Broker    BrokerConfig
+	RateLimit RateLimitConfig
+}
+
+// RateLimitConfig — ограничение частоты запросов с одного IP к API
+// и веб-интерфейсу (token bucket).
+type RateLimitConfig struct {
+	// RPS — сколько запросов в секунду пополняется в «ведре». 0 — без ограничения.
+	RPS float64
+	// Burst — ёмкость «ведра»: сколько запросов можно сделать подряд.
+	Burst int
 }
 
 // S3Config — параметры запуска S3.
@@ -94,6 +107,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	rateLimit, err := loadRateLimit()
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTPAddr:      getEnv("HTTP_ADDR", defaultHTTPAddr),
 		LogLevel:      logLevel,
@@ -101,7 +119,28 @@ func Load() (Config, error) {
 		MaxUploadSize: maxUploadSize,
 		S3:            s3,
 		Broker:        broker,
+		RateLimit:     rateLimit,
 	}, nil
+}
+
+func loadRateLimit() (RateLimitConfig, error) {
+	cfg := RateLimitConfig{RPS: defaultRateLimitRPS, Burst: defaultRateLimitBurst}
+
+	if v := getEnv("RATE_LIMIT_RPS", ""); v != "" {
+		rps, err := strconv.ParseFloat(v, 64)
+		if err != nil || rps < 0 {
+			return RateLimitConfig{}, fmt.Errorf("RATE_LIMIT_RPS: want a non-negative number, got %q", v)
+		}
+		cfg.RPS = rps
+	}
+	if v := getEnv("RATE_LIMIT_BURST", ""); v != "" {
+		burst, err := strconv.Atoi(v)
+		if err != nil || burst < 1 {
+			return RateLimitConfig{}, fmt.Errorf("RATE_LIMIT_BURST: want a positive integer, got %q", v)
+		}
+		cfg.Burst = burst
+	}
+	return cfg, nil
 }
 
 func loadS3() (S3Config, error) {

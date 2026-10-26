@@ -78,6 +78,8 @@ server и worker читают одни и те же переменные.
 | `BROKER` | `rabbitmq` | `rabbitmq` или `kafka` |
 | `RABBITMQ_URL` | — (для `rabbitmq`) | `amqp://user:pass@host:5672/` |
 | `KAFKA_BROKERS` | — (для `kafka`) | Список брокеров через запятую |
+| `RATE_LIMIT_RPS` | `20` | Запросов в секунду с одного IP к `/api/v1` и `/web`; `0` — без ограничения. Сверх лимита — 429 с `Retry-After` |
+| `RATE_LIMIT_BURST` | `40` | Сколько запросов подряд можно сделать сверх средней скорости |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
 `APP_PORT` из `.env.example` настраивают контейнеры docker compose.

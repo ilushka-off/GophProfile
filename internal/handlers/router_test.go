@@ -81,3 +81,32 @@ func TestRouterRejectsLargeBodies(t *testing.T) {
 		})
 	}
 }
+
+func TestRouterRateLimit(t *testing.T) {
+	router := NewRouter(discardLogger(), RouterOptions{RateLimitRPS: 0.1, RateLimitBurst: 1},
+		healthyHandler(),
+		NewAvatarHandler(&fakeAvatarService{}, testMaxUploadSize, discardLogger()),
+		newTestWebHandler(&fakeAvatarService{}),
+	)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	if rec := get("/api/v1/users/u/avatars"); rec.Code != http.StatusOK {
+		t.Fatalf("first request: %d", rec.Code)
+	}
+	rec := get("/web/upload") // веб и API делят одно ведро
+	if rec.Code != http.StatusTooManyRequests || rec.Body.String() != `{"error":"Too many requests"}`+"\n" {
+		t.Errorf("limited request: %d %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("no Retry-After header")
+	}
+	for range 3 {
+		if rec := get("/health"); rec.Code != http.StatusOK {
+			t.Errorf("/health must not be limited, got %d", rec.Code)
+		}
+	}
+}

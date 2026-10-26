@@ -23,6 +23,9 @@ func setBaseEnv(t *testing.T) {
 		"S3_USE_SSL":      "",
 		"BROKER":          "",
 		"KAFKA_BROKERS":   "",
+
+		"RATE_LIMIT_RPS":   "",
+		"RATE_LIMIT_BURST": "",
 	} {
 		t.Setenv(k, v)
 	}
@@ -48,7 +51,8 @@ func TestLoadDefaults(t *testing.T) {
 			SecretKey: "secret",
 			Bucket:    "avatars",
 		},
-		Broker: BrokerConfig{Kind: BrokerRabbitMQ, RabbitMQURL: "amqp://u:p@localhost:5672/"},
+		Broker:    BrokerConfig{Kind: BrokerRabbitMQ, RabbitMQURL: "amqp://u:p@localhost:5672/"},
+		RateLimit: RateLimitConfig{RPS: defaultRateLimitRPS, Burst: defaultRateLimitBurst},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -63,6 +67,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("S3_USE_SSL", "true")
 	t.Setenv("BROKER", "kafka")
 	t.Setenv("KAFKA_BROKERS", "k1:9092, k2:9092,")
+	t.Setenv("RATE_LIMIT_RPS", "0.5")
+	t.Setenv("RATE_LIMIT_BURST", "3")
 
 	cfg, err := Load()
 	if err != nil {
@@ -84,6 +90,9 @@ func TestLoadOverrides(t *testing.T) {
 	if want := []string{"k1:9092", "k2:9092"}; !reflect.DeepEqual(cfg.Broker.KafkaBrokers, want) {
 		t.Errorf("KafkaBrokers = %v, want %v", cfg.Broker.KafkaBrokers, want)
 	}
+	if cfg.RateLimit != (RateLimitConfig{RPS: 0.5, Burst: 3}) {
+		t.Errorf("RateLimit = %+v", cfg.RateLimit)
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -102,6 +111,9 @@ func TestLoadErrors(t *testing.T) {
 		{name: "unknown broker", env: map[string]string{"BROKER": "nats"}},
 		{name: "no rabbitmq url", env: map[string]string{"RABBITMQ_URL": ""}, wantErr: ErrBrokerConfigNotFound},
 		{name: "no kafka brokers", env: map[string]string{"BROKER": "kafka", "KAFKA_BROKERS": " , "}, wantErr: ErrBrokerConfigNotFound},
+		{name: "bad rate limit", env: map[string]string{"RATE_LIMIT_RPS": "fast"}},
+		{name: "negative rate limit", env: map[string]string{"RATE_LIMIT_RPS": "-1"}},
+		{name: "zero burst", env: map[string]string{"RATE_LIMIT_BURST": "0"}},
 	}
 
 	for _, tt := range tests {

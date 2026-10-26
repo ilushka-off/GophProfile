@@ -90,6 +90,10 @@ func run() error {
 	avatarService := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
 
 	router := handlers.NewRouter(logger,
+		handlers.RouterOptions{
+			RateLimitRPS:   cfg.RateLimit.RPS,
+			RateLimitBurst: cfg.RateLimit.Burst,
+		},
 		handlers.NewHealthHandler(pool, storage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
 		handlers.NewWebHandler(avatarService, templates, cfg.MaxUploadSize, logger),

@@ -26,4 +26,6 @@ const (
 const (
 	msgRouteNotFound    = "Not found"
 	msgMethodNotAllowed = "Method not allowed"
+	// 429 — бонусная часть ТЗ, текста в нём нет.
+	msgTooManyRequests = "Too many requests"
 )
