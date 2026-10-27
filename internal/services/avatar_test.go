@@ -131,8 +131,25 @@ func newDeps() *deps {
 		storage:   &fakeStorage{log: log},
 		publisher: &fakePublisher{log: log},
 	}
-	d.svc = NewAvatarService(d.repo, d.storage, d.publisher, testMaxUploadSize)
+	svc, err := NewAvatarService(d.repo, d.storage, d.publisher, testMaxUploadSize)
+	if err != nil {
+		panic(err)
+	}
+	d.svc = svc
 	return d
+}
+
+func TestNewAvatarServiceMaxUploadSize(t *testing.T) {
+	for _, size := range []int64{1, MaxUploadSizeLimit} {
+		if _, err := NewAvatarService(nil, nil, nil, size); err != nil {
+			t.Errorf("NewAvatarService(size=%d) error = %v", size, err)
+		}
+	}
+	for _, size := range []int64{-1, 0, MaxUploadSizeLimit + 1} {
+		if _, err := NewAvatarService(nil, nil, nil, size); err == nil {
+			t.Errorf("NewAvatarService(size=%d) error = nil, want error", size)
+		}
+	}
 }
 
 func encodePNG(t *testing.T, w, h int) []byte {

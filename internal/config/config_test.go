@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"log/slog"
+	"os"
 	"reflect"
 	"testing"
 )
@@ -10,25 +11,43 @@ import (
 func setBaseEnv(t *testing.T) {
 	t.Helper()
 	for k, v := range map[string]string{
-		"DATABASE_URI":    "postgres://u:p@localhost:5432/db",
-		"S3_ENDPOINT":     "localhost:8333",
-		"S3_ACCESS_KEY":   "key",
-		"S3_SECRET_KEY":   "secret",
-		"S3_BUCKET":       "avatars",
-		"RABBITMQ_URL":    "amqp://u:p@localhost:5672/",
-		"HTTP_ADDR":       "",
-		"LOG_LEVEL":       "",
-		"MAX_UPLOAD_SIZE": "",
-		"S3_REGION":       "",
-		"S3_USE_SSL":      "",
-		"BROKER":          "",
-		"KAFKA_BROKERS":   "",
-
-		"RATE_LIMIT_RPS":       "",
-		"RATE_LIMIT_BURST":     "",
-		"CORS_ALLOWED_ORIGINS": "",
+		"DATABASE_URI":  "postgres://u:p@localhost:5432/db",
+		"S3_ENDPOINT":   "localhost:8333",
+		"S3_ACCESS_KEY": "key",
+		"S3_SECRET_KEY": "secret",
+		"S3_BUCKET":     "avatars",
+		"RABBITMQ_URL":  "amqp://u:p@localhost:5672/",
 	} {
 		t.Setenv(k, v)
+	}
+	for _, k := range []string{
+		"HTTP_ADDR", "LOG_LEVEL", "MAX_UPLOAD_SIZE", "S3_REGION", "S3_USE_SSL",
+		"BROKER", "KAFKA_BROKERS", "RATE_LIMIT_RPS", "RATE_LIMIT_BURST", "CORS_ALLOWED_ORIGINS",
+	} {
+		unsetEnv(t, k)
+	}
+}
+
+// unsetEnv удаляет переменную на время теста; t.Setenv нужен, чтобы
+// исходное значение восстановилось в Cleanup.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "")
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("Unsetenv(%s): %v", key, err)
+	}
+}
+
+func TestLoadEmptyIsNotUnset(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("S3_REGION", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.S3.Region != "" {
+		t.Errorf("S3.Region = %q, want empty: explicitly empty value must not fall back to default", cfg.S3.Region)
 	}
 }
 
@@ -109,11 +128,11 @@ func TestLoadErrors(t *testing.T) {
 		{name: "no database uri", env: map[string]string{"DATABASE_URI": ""}, wantErr: ErrDatabaseURINotFound},
 		{name: "bad log level", env: map[string]string{"LOG_LEVEL": "loud"}},
 		{name: "bad max upload size", env: map[string]string{"MAX_UPLOAD_SIZE": "ten"}},
-		{name: "zero max upload size", env: map[string]string{"MAX_UPLOAD_SIZE": "0"}},
-		{name: "too big max upload size", env: map[string]string{"MAX_UPLOAD_SIZE": "10485761"}},
 		{name: "no s3 bucket", env: map[string]string{"S3_BUCKET": ""}, wantErr: ErrS3ConfigNotFound},
 		{name: "bad s3 use ssl", env: map[string]string{"S3_USE_SSL": "yes"}},
+		{name: "empty http addr", env: map[string]string{"HTTP_ADDR": ""}},
 		{name: "unknown broker", env: map[string]string{"BROKER": "nats"}},
+		{name: "empty broker", env: map[string]string{"BROKER": ""}},
 		{name: "no rabbitmq url", env: map[string]string{"RABBITMQ_URL": ""}, wantErr: ErrBrokerConfigNotFound},
 		{name: "no kafka brokers", env: map[string]string{"BROKER": "kafka", "KAFKA_BROKERS": " , "}, wantErr: ErrBrokerConfigNotFound},
 		{name: "bad rate limit", env: map[string]string{"RATE_LIMIT_RPS": "fast"}},

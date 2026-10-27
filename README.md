@@ -79,7 +79,7 @@ server и worker читают одни и те же переменные.
 | `HTTP_ADDR` | `:8080` | Адрес HTTP-сервера |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `DATABASE_URI` | — (обязательная) | `postgres://user:pass@host:5432/db?sslmode=disable` |
-| `MAX_UPLOAD_SIZE` | `10485760` | Лимит файла в байтах, не больше 10 MB |
+| `MAX_UPLOAD_SIZE` | `10485760` | Лимит файла в байтах, от 1 до 10 MiB (проверяется при старте сервиса) |
 | `S3_ENDPOINT` | — (обязательная) | `host:port` S3-совместимого хранилища |
 | `S3_REGION` | `us-east-1` | Регион бакета |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | — (обязательные) | Ключи доступа |

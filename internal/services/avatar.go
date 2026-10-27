@@ -95,9 +95,17 @@ type AvatarService struct {
 	maxUploadSize int64
 }
 
-// NewAvatarService создаёт сервис. maxUploadSize — лимит размера файла в байтах.
-func NewAvatarService(repo AvatarRepository, storage Storage, publisher Publisher, maxUploadSize int64) *AvatarService {
-	return &AvatarService{repo: repo, storage: storage, publisher: publisher, maxUploadSize: maxUploadSize}
+// MaxUploadSizeLimit — верхняя граница лимита на размер файла: сервис
+// не принимает файлы крупнее 10 MiB, как бы ни был настроен лимит.
+const MaxUploadSizeLimit = 10 << 20
+
+// NewAvatarService создаёт сервис. maxUploadSize — лимит размера файла в байтах,
+// от 1 до MaxUploadSizeLimit.
+func NewAvatarService(repo AvatarRepository, storage Storage, publisher Publisher, maxUploadSize int64) (*AvatarService, error) {
+	if maxUploadSize < 1 || maxUploadSize > MaxUploadSizeLimit {
+		return nil, fmt.Errorf("max upload size must be between 1 and %d bytes, got %d", MaxUploadSizeLimit, maxUploadSize)
+	}
+	return &AvatarService{repo: repo, storage: storage, publisher: publisher, maxUploadSize: maxUploadSize}, nil
 }
 
 // UploadInput — загружаемый файл. File читается с начала несколько раз,

@@ -14,7 +14,6 @@ import (
 const (
 	defaultHTTPAddr      = ":8080"
 	defaultMaxUploadSize = 10 << 20 // 10 MiB
-	maxMaxUploadSize     = 10 << 20 // 10 MiB
 	defaultS3Region      = "us-east-1"
 
 	defaultRateLimitRPS   = 20
@@ -98,9 +97,6 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("MAX_UPLOAD_SIZE: %w", err)
 		}
 	}
-	if maxUploadSize < 1 || maxUploadSize > maxMaxUploadSize {
-		return Config{}, fmt.Errorf("MAX_UPLOAD_SIZE: must be between 1 and %d bytes, got %d", maxMaxUploadSize, maxUploadSize)
-	}
 
 	s3, err := loadS3()
 	if err != nil {
@@ -122,8 +118,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	// Пустой Addr net/http трактует как ":http" (порт 80) — это почти наверняка
+	// ошибка в окружении, а не намерение.
+	httpAddr := getEnv("HTTP_ADDR", defaultHTTPAddr)
+	if httpAddr == "" {
+		return Config{}, errors.New("HTTP_ADDR: must not be empty")
+	}
+
 	return Config{
-		HTTPAddr:           getEnv("HTTP_ADDR", defaultHTTPAddr),
+		HTTPAddr:           httpAddr,
 		LogLevel:           logLevel,
 		DatabaseURI:        databaseURI,
 		MaxUploadSize:      maxUploadSize,
@@ -226,9 +229,11 @@ func loadBroker() (BrokerConfig, error) {
 	return cfg, nil
 }
 
-// getEnv возвращает значение переменной окружения или def, если она не задана или пуста.
+// getEnv возвращает значение переменной окружения или def, если она не задана.
+// Явно заданная пустая строка возвращается как есть: решать, что она значит,
+// должен вызывающий код, а не молча подменять её значением по умолчанию.
 func getEnv(key, def string) string {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def

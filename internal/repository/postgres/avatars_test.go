@@ -219,6 +219,18 @@ func (s *RepositorySuite) TestSetProcessingStatus() {
 		"deleted avatar must not change")
 }
 
+func (s *RepositorySuite) TestUnknownStatusRejected() {
+	ctx := context.Background()
+	a := s.createAvatar("user-42")
+
+	s.Error(s.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingStatus("done")),
+		"processing_status must reject values outside the enum")
+
+	b := newTestAvatar("user-42")
+	b.UploadStatus = domain.UploadStatus("done")
+	s.Error(s.repo.Create(ctx, b), "upload_status must reject values outside the enum")
+}
+
 func (s *RepositorySuite) TestCompleteProcessing() {
 	ctx := context.Background()
 	a := newTestAvatar("user-42")

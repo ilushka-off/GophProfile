@@ -87,7 +87,10 @@ func run() error {
 		return fmt.Errorf("parse web templates: %w", err)
 	}
 
-	avatarService := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
+	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
+	if err != nil {
+		return fmt.Errorf("create avatar service: %w", err)
+	}
 
 	router := handlers.NewRouter(logger,
 		handlers.RouterOptions{
