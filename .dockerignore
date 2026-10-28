@@ -1,0 +1,7 @@
+.git
+.idea
+.env
+docker
+k8s
+bin
+*.out
