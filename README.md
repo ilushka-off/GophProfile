@@ -206,6 +206,30 @@ headers в Kafka), поэтому трейс сквозной для обоих 
 curl -si -H 'X-User-ID: user-42' -F file=@me.png http://localhost:8080/api/v1/avatars | grep -i x-trace-id
 ```
 
+### Метрики и дашборды
+
+Prometheus опрашивает раз в 15 секунд server, worker, брокер (плагин
+`rabbitmq_prometheus` или kafka-exporter), cAdvisor и SeaweedFS и хранит
+данные 7 дней. Метрики сервиса:
+
+| Метрика | Что считает |
+| --- | --- |
+| `http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight` | RED по `method`, `route` (шаблон маршрута), `status` |
+| `avatars_uploads_total{status}` | Загрузки: `success`, `rejected` (файл не прошёл проверки), `error` (сбой) |
+| `avatars_upload_duration_seconds`, `avatars_deletes_total` | Длительность успешной загрузки, удаления |
+| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_total` | Объём оригиналов неудалённых аватарок (считается в БД при опросе) |
+| `avatars_processing_total{type,status}`, `avatars_processing_duration_seconds` | События worker'а: успех или DLQ, время обработки с повторами |
+| `avatars_processing_lag_seconds` | Сколько событие ждало в брокере до начала обработки |
+| `pgxpool_*` | Пул соединений PostgreSQL: занятые, свободные, ожидание |
+| `go_*`, `process_*` | Go runtime и процесс |
+
+Дашборды Grafana лежат в `deploy/observability/grafana/dashboards` и
+подключаются при старте (правки в UI не сохраняются):
+
+- **Service overview** — доступность server и worker, RPS, доля 5xx, p95,
+  последние ошибки из Loki;
+- **RED** — rate, errors, duration (p50/p95/p99) по маршрутам, переменная `$service`.
+
 ### Логи
 
 server и worker пишут JSON в stdout: `time`, `level`, `msg`, `service`
