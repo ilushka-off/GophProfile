@@ -48,6 +48,8 @@ func (h traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	return traceHandler{Handler: h.Handler.WithAttrs(attrs)}
 }
 
+// WithGroup: trace_id и span_id записи из группы окажутся внутри группы,
+// поэтому для логов, которые ищут по trace_id, группы лучше не использовать.
 func (h traceHandler) WithGroup(name string) slog.Handler {
 	return traceHandler{Handler: h.Handler.WithGroup(name)}
 }

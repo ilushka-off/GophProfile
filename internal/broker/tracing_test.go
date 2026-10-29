@@ -123,8 +123,15 @@ func TestTracingPropagatesThroughMessage(t *testing.T) {
 		}
 	}
 
+	if err := pub.Ping(context.Background()); err != nil {
+		t.Errorf("Ping() = %v", err)
+	}
 	if err := pub.Close(); err != nil || !mem.closed {
-		t.Error("Close is not passed through")
+		t.Error("publisher Close is not passed through")
+	}
+	mem.closed = false
+	if err := con.Close(); err != nil || !mem.closed {
+		t.Error("consumer Close is not passed through")
 	}
 }
 
