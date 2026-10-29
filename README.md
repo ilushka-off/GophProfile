@@ -154,6 +154,58 @@ curl -s http://localhost:8080/health
 | POST | `/web/upload` | Та же загрузка из обычной HTML-формы (без JS), затем редирект на галерею |
 | GET | `/web/gallery/{user_id}` | Миниатюры 300x300 с размером, форматом, статусом и кнопкой удаления |
 
+## Наблюдаемость
+
+Профиль `observability` поднимает рядом с сервисом Prometheus, Jaeger, Loki,
+Alloy, Grafana и cAdvisor:
+
+```bash
+docker compose --profile observability --profile rabbitmq up --build   # или с kafka
+```
+
+| Адрес | Что там |
+| --- | --- |
+| http://localhost:3000/ | Grafana: дашборды в папке GophProfile (без входа; админ — `GRAFANA_ADMIN_*`) |
+| http://localhost:16686/ | Jaeger UI: трейсы и граф зависимостей (System Architecture) |
+| http://localhost:9090/targets | Prometheus: все цели должны быть UP |
+| http://localhost:8080/metrics | Метрики server (worker — на `:9091` внутри сети compose) |
+
+Без профиля сервис работает как раньше: трейсы, которые некуда отправить,
+теряются, ошибки экспорта пишутся в лог.
+
+### Трейсы
+
+server и worker пишут трейсы OpenTelemetry и отправляют их в Jaeger по OTLP
+gRPC (`OTEL_EXPORTER_OTLP_ENDPOINT`). Загрузка аватарки видна одним трейсом от
+HTTP-запроса до готовых миниатюр:
+
+```
+POST /api/v1/avatars                         avatar-service
+└─ upload_avatar                             user.id, avatar.id, file.size, mime.type
+   ├─ s3.PutObject                           s3.bucket, s3.key, file.size
+   ├─ INSERT                                 db.system.name=postgresql (текст запроса без параметров)
+   └─ publish avatars.exchange               kind=producer, traceparent → заголовки сообщения
+      └─ process avatars.process             avatar-worker, kind=consumer
+         ├─ SELECT (дедупликация, статус)
+         └─ process_thumbnails               thumbnail.sizes
+            ├─ s3.GetObject
+            ├─ s3.PutObject × 2
+            └─ UPDATE
+```
+
+Контекст трейса едет в заголовках сообщения (AMQP headers в RabbitMQ, record
+headers в Kafka), поэтому трейс сквозной для обоих брокеров. Имя HTTP-спана —
+шаблон маршрута (`GET /api/v1/avatars/{avatar_id}`), ответы 5xx помечают спан
+ошибкой, `/health` и `/metrics` не трейсятся. Каждый ответ API несёт заголовок
+`X-Trace-ID`: по нему трейс находится в Jaeger, а логи запроса — в Loki.
+
+Как проверить: загрузить файл, взять `X-Trace-ID` из ответа и открыть
+`http://localhost:16686/trace/<trace_id>`.
+
+```bash
+curl -si -H 'X-User-ID: user-42' -F file=@me.png http://localhost:8080/api/v1/avatars | grep -i x-trace-id
+```
+
 ## Разработка
 
 server и worker без переменных окружения не стартуют (например, `database URI
@@ -186,9 +238,11 @@ cmd/server, cmd/worker         точки входа
 internal/config                конфиг из переменных окружения
 internal/domain                модель Avatar, ошибки, ключи S3
 internal/handlers              HTTP-обработчики API и веб-интерфейса, роутер
-internal/middleware, httpx     логирование, recover, формат ответов
+internal/middleware, httpx     логирование, трейсинг, метрики HTTP, recover, формат ответов
+internal/observability         OpenTelemetry, JSON-логи с trace_id, реестр метрик
 internal/services              бизнес-логика аватарок
 internal/repository/postgres   PostgreSQL (pgx) и миграции
+internal/storage               трейсинг операций с файлами
 internal/storage/s3            S3-клиент (minio-go)
 internal/broker                интерфейсы брокера, события, retry
 internal/broker/{rabbitmq,kafka,factory}  реализации и выбор по BROKER
@@ -196,4 +250,5 @@ internal/imaging               кодирование и ресайз карти
 internal/worker                обработка событий worker'ом
 web                            HTML-шаблоны (встроены в бинарник)
 docker/Dockerfile              multi-stage сборка, цели server и worker
+deploy/observability           конфиги Prometheus, Loki, Alloy, Grafana
 ```
