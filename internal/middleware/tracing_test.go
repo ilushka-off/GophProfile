@@ -117,7 +117,7 @@ func TestTracingSkipsServicePaths(t *testing.T) {
 func attrValue(span sdktrace.ReadOnlySpan, key attribute.Key) string {
 	for _, kv := range span.Attributes() {
 		if kv.Key == key {
-			return kv.Value.Emit()
+			return kv.Value.String()
 		}
 	}
 	return ""

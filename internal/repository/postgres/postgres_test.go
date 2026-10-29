@@ -116,7 +116,7 @@ func (s *RepositorySuite) TestQueriesAreTraced() {
 
 	attrs := map[attribute.Key]string{}
 	for _, kv := range query.Attributes() {
-		attrs[kv.Key] = kv.Value.Emit()
+		attrs[kv.Key] = kv.Value.String()
 	}
 	s.Equal("postgresql", attrs[semconv.DBSystemNameKey])
 	s.Equal("SELECT", attrs[semconv.DBOperationNameKey])

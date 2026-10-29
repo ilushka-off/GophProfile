@@ -51,7 +51,7 @@ func TestServeMetrics(t *testing.T) {
 
 	var body string
 	for range 50 {
-		resp, err := http.Get("http://" + addr + "/metrics") //nolint:noctx // тест
+		resp, err := http.Get("http://" + addr + "/metrics")
 		if err == nil {
 			b, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()

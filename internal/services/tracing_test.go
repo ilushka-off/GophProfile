@@ -40,7 +40,7 @@ func onlySpan(t *testing.T, rec *tracetest.SpanRecorder, name string) sdktrace.R
 func spanAttrs(span sdktrace.ReadOnlySpan) map[attribute.Key]string {
 	m := map[attribute.Key]string{}
 	for _, kv := range span.Attributes() {
-		m[kv.Key] = kv.Value.Emit()
+		m[kv.Key] = kv.Value.String()
 	}
 	return m
 }

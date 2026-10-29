@@ -29,7 +29,7 @@ func TestProcessThumbnailsSpan(t *testing.T) {
 	span := ended[0]
 	attrs := map[string]string{}
 	for _, kv := range span.Attributes() {
-		attrs[string(kv.Key)] = kv.Value.Emit()
+		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	if attrs["avatar.id"] != testID.String() || attrs["thumbnail.sizes"] != `["100x100","300x300"]` {
 		t.Errorf("attributes = %v", attrs)

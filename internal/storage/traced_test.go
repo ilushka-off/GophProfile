@@ -49,7 +49,7 @@ func newTraced(t *testing.T, next Storage) (*Traced, *tracetest.SpanRecorder, tr
 func attrs(span sdktrace.ReadOnlySpan) map[attribute.Key]string {
 	m := map[attribute.Key]string{}
 	for _, kv := range span.Attributes() {
-		m[kv.Key] = kv.Value.Emit()
+		m[kv.Key] = kv.Value.String()
 	}
 	return m
 }

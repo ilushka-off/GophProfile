@@ -115,7 +115,7 @@ func TestTracingPropagatesThroughMessage(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, kv := range consumer.Attributes() {
-		got[string(kv.Key)] = kv.Value.Emit()
+		got[string(kv.Key)] = kv.Value.String()
 	}
 	for k, v := range want {
 		if got[k] != v {
