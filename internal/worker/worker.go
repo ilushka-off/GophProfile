@@ -15,12 +15,21 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	_ "golang.org/x/image/webp" // декодер для image.Decode
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/domain"
 	"go-avatar-service/internal/imaging"
+	"go-avatar-service/internal/observability"
 )
+
+// tracerName — имя инструментирования в спанах worker'а.
+const tracerName = "go-avatar-service/internal/worker"
+
+// spanProcessThumbnails — бизнес-спан создания миниатюр одной аватарки.
+const spanProcessThumbnails = "process_thumbnails"
 
 // thumbnailSides — сторона квадрата миниатюры в пикселях по её размеру.
 var thumbnailSides = map[string]int{
@@ -158,7 +167,14 @@ func (p *Processor) handleDeleted(ctx context.Context, msg broker.Message) error
 // makeThumbnails скачивает оригинал, создаёт миниатюры sizes в JPEG, кладёт
 // их в S3 и отмечает обработку законченной. Ключи миниатюр детерминированы,
 // поэтому повтор после сбоя просто перезапишет те же файлы.
-func (p *Processor) makeThumbnails(ctx context.Context, a *domain.Avatar, sizes []string) error {
+func (p *Processor) makeThumbnails(ctx context.Context, a *domain.Avatar, sizes []string) (err error) {
+	ctx, span := otel.Tracer(tracerName).Start(ctx, spanProcessThumbnails, trace.WithAttributes(
+		observability.AttrAvatarID.String(a.ID.String()),
+		observability.AttrUserID.String(a.UserID),
+		observability.AttrThumbnailSizes.StringSlice(sizes),
+	))
+	defer func() { observability.EndSpan(span, err, nil) }()
+
 	if err := p.repo.SetProcessingStatus(ctx, a.ID, domain.ProcessingStatusProcessing); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil // удалили, пока событие шло
@@ -170,6 +186,7 @@ func (p *Processor) makeThumbnails(ctx context.Context, a *domain.Avatar, sizes 
 	if err != nil {
 		return err
 	}
+	span.AddEvent("downloaded")
 
 	keys := make(map[string]string, len(sizes))
 	for _, size := range sizes {
@@ -183,6 +200,7 @@ func (p *Processor) makeThumbnails(ctx context.Context, a *domain.Avatar, sizes 
 		}
 		keys[size] = key
 	}
+	span.AddEvent("stored")
 
 	err = p.repo.CompleteProcessing(ctx, a.ID, keys)
 	if errors.Is(err, domain.ErrNotFound) {

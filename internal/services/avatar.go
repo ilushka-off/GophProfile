@@ -17,11 +17,14 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	_ "golang.org/x/image/webp" // декодер для image.DecodeConfig и image.Decode
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/domain"
 	"go-avatar-service/internal/imaging"
+	"go-avatar-service/internal/observability"
 )
 
 // sniffLen — сколько первых байт файла смотрит http.DetectContentType.
@@ -59,6 +62,27 @@ const maxPixels = 50_000_000
 
 // mimeOctetStream — Content-Type, который клиенты ставят, когда не знают тип файла.
 const mimeOctetStream = "application/octet-stream"
+
+// Имена бизнес-спанов: сценарий целиком, внутри — спаны БД, S3 и брокера.
+const (
+	spanUploadAvatar = "upload_avatar"
+	spanDeleteAvatar = "delete_avatar"
+)
+
+// tracer берётся из глобального provider при каждом вызове, а не один раз
+// при инициализации пакета: так спаны идут в provider, настроенный в main.
+func tracer() trace.Tracer {
+	return otel.Tracer("go-avatar-service/internal/services")
+}
+
+// IsClientError — ошибка вызвана запросом клиента (формат, размер, права,
+// нет аватарки), а не сбоем сервиса. Такие ошибки не помечают спан ошибкой.
+func IsClientError(err error) bool {
+	var validation *domain.ValidationError
+	return errors.Is(err, domain.ErrInvalidFormat) || errors.Is(err, domain.ErrTooLarge) ||
+		errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) ||
+		errors.As(err, &validation)
+}
 
 // AvatarRepository — хранилище метаданных аватарок, которое нужно сервису.
 type AvatarRepository interface {
@@ -124,7 +148,13 @@ type UploadInput struct {
 // avatar.uploaded. Миниатюры не ждёт: их создаст worker.
 // Если публикация не удалась, строка и оригинал удаляются: ошибка значит,
 // что ничего не сохранилось, и запрос можно повторить.
-func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Avatar, error) {
+func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (a *domain.Avatar, err error) {
+	ctx, span := tracer().Start(ctx, spanUploadAvatar, trace.WithAttributes(
+		observability.AttrUserID.String(in.UserID),
+		observability.AttrFileSize.Int64(in.Size),
+	))
+	defer func() { observability.EndSpan(span, err, IsClientError) }()
+
 	if in.Size > s.maxUploadSize {
 		return nil, domain.ErrTooLarge
 	}
@@ -133,6 +163,7 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	if err != nil {
 		return nil, err
 	}
+	span.SetAttributes(observability.AttrMimeType.String(mimeType))
 	if err := checkDeclaredType(in.ContentType, mimeType); err != nil {
 		return nil, err
 	}
@@ -140,18 +171,20 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 	if err != nil {
 		return nil, err
 	}
+	span.AddEvent("validated")
 	ext := format.ext
 	if _, err := in.File.Seek(0, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("rewind file: %w", err)
 	}
 
 	id := uuid.New()
+	span.SetAttributes(observability.AttrAvatarID.String(id.String()))
 	key := domain.OriginalKey(id, ext)
 	if err := s.storage.Upload(ctx, key, in.File, in.Size, mimeType); err != nil {
 		return nil, err
 	}
 
-	a := &domain.Avatar{
+	a = &domain.Avatar{
 		ID:               id,
 		UserID:           in.UserID,
 		FileName:         truncateRunes(in.FileName, maxFileNameLength),
@@ -171,6 +204,7 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 		}
 		return nil, err
 	}
+	span.AddEvent("stored")
 
 	if err := s.publishUploaded(ctx, a); err != nil {
 		// Без события миниатюры никто не создаст, и аватарка навсегда осталась бы
@@ -178,6 +212,7 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (*domain.Ava
 		// строку и пропустит его.
 		return nil, s.rollbackUpload(ctx, a, err)
 	}
+	span.AddEvent("published")
 	return a, nil
 }
 
@@ -324,7 +359,13 @@ func convert(obj *domain.Object, mimeType string) (*domain.Object, error) {
 // Delete мягко удаляет аватарку id от имени userID и публикует avatar.deleted:
 // файлы из S3 удалит worker. Чужая аватарка — domain.ErrForbidden,
 // удалённая или несуществующая — domain.ErrNotFound.
-func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID) error {
+func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID) (err error) {
+	ctx, span := tracer().Start(ctx, spanDeleteAvatar, trace.WithAttributes(
+		observability.AttrUserID.String(userID),
+		observability.AttrAvatarID.String(id.String()),
+	))
+	defer func() { observability.EndSpan(span, err, IsClientError) }()
+
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -338,7 +379,10 @@ func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID)
 // DeleteCurrent удаляет текущую аватарку пользователя userID от имени actorID,
 // как Delete. Удалять можно только у себя: actorID ≠ userID — domain.ErrForbidden.
 // Аватарок нет — domain.ErrNotFound.
-func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID string) error {
+func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID string) (err error) {
+	ctx, span := tracer().Start(ctx, spanDeleteAvatar, trace.WithAttributes(observability.AttrUserID.String(actorID)))
+	defer func() { observability.EndSpan(span, err, IsClientError) }()
+
 	if actorID != userID {
 		return domain.ErrForbidden
 	}
@@ -346,6 +390,7 @@ func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID strin
 	if err != nil {
 		return err
 	}
+	span.SetAttributes(observability.AttrAvatarID.String(a.ID.String()))
 	return s.softDelete(ctx, a)
 }
 
