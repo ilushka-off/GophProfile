@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/exaring/otelpgx"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,8 +18,23 @@ const (
 
 // OpenPool создаёт пул соединений к PostgreSQL по databaseURI
 // и проверяет, что база отвечает. При ошибке пул закрывается.
+// Каждый запрос внутри трейса пишется дочерним спаном (db.system.name =
+// postgresql, текст запроса без параметров). Запросы вне трейса, например
+// проверки /health, спанов не создают.
 func OpenPool(ctx context.Context, databaseURI string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURI)
+	// Спаны ожидания свободного соединения только загромождают трейс:
+	// время ожидания видно в метриках пула.
+	return openPool(ctx, databaseURI, otelpgx.NewTracer(otelpgx.WithDisableAcquireTracer()))
+}
+
+func openPool(ctx context.Context, databaseURI string, tracer pgx.QueryTracer) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURI)
+	if err != nil {
+		return nil, fmt.Errorf("parse database uri: %w", err)
+	}
+	cfg.ConnConfig.Tracer = tracer
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create pool: %w", err)
 	}

@@ -4,10 +4,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
 const postgresImage = "postgres:17-alpine"
@@ -70,6 +75,50 @@ func (s *RepositorySuite) SetupTest() {
 
 func (s *RepositorySuite) TestRunMigrationsIsIdempotent() {
 	s.NoError(RunMigrations(s.databaseURI), "second run")
+}
+
+// Запросы внутри трейса становятся дочерними спанами с атрибутами БД
+// и текстом запроса без параметров; вне трейса спанов нет.
+func (s *RepositorySuite) TestQueriesAreTraced() {
+	ctx := context.Background()
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	defer func() { _ = tp.Shutdown(ctx) }()
+
+	pool, err := openPool(ctx, s.databaseURI, otelpgx.NewTracer(
+		otelpgx.WithTracerProvider(tp), otelpgx.WithDisableAcquireTracer()))
+	s.Require().NoError(err)
+	defer pool.Close()
+	repo := NewAvatarRepository(pool)
+
+	// Вне трейса.
+	_, err = repo.ListByUser(ctx, "user-1")
+	s.Require().NoError(err)
+	s.Empty(rec.Ended(), "query outside a trace must not start a root span")
+
+	parentCtx, parent := tp.Tracer("test").Start(ctx, "GET /api/v1/users/{user_id}/avatars")
+	_, err = repo.ListByUser(parentCtx, "user-1")
+	s.Require().NoError(err)
+	parent.End()
+
+	var query sdktrace.ReadOnlySpan
+	for _, span := range rec.Ended() {
+		if span.SpanContext().SpanID() != parent.SpanContext().SpanID() {
+			query = span
+		}
+	}
+	s.Require().NotNil(query, "no query span")
+	s.Equal(parent.SpanContext().SpanID(), query.Parent().SpanID(), "query span is not a child of the request span")
+	s.Equal("SELECT", query.Name())
+
+	attrs := map[attribute.Key]string{}
+	for _, kv := range query.Attributes() {
+		attrs[kv.Key] = kv.Value.Emit()
+	}
+	s.Equal("postgresql", attrs[semconv.DBSystemNameKey])
+	s.Equal("SELECT", attrs[semconv.DBOperationNameKey])
+	s.Contains(attrs[semconv.DBQueryTextKey], "WHERE user_id = $1")
+	s.NotContains(attrs[semconv.DBQueryTextKey], "user-1", "query parameters must not be recorded")
 }
 
 func TestOpenPool(t *testing.T) {
