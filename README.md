@@ -206,6 +206,26 @@ headers в Kafka), поэтому трейс сквозной для обоих 
 curl -si -H 'X-User-ID: user-42' -F file=@me.png http://localhost:8080/api/v1/avatars | grep -i x-trace-id
 ```
 
+### Логи
+
+server и worker пишут JSON в stdout: `time`, `level`, `msg`, `service`
+(`avatar-service` или `avatar-worker`), `version` и, если запись сделана внутри
+трейса, `trace_id` и `span_id`. Уровень задаёт `LOG_LEVEL`. Каждый HTTP-запрос
+пишется access-логом с `method`, `route`, `status`, `duration_ms`. Содержимое
+файлов, пароли и строки подключения в лог не попадают.
+
+Alloy собирает логи всех контейнеров проекта и отправляет в Loki с лейблами
+`service`, `level` и `container`; `trace_id` остаётся в теле строки. Примеры
+запросов в Grafana → Explore → Loki:
+
+```logql
+{service="avatar-service"} | json | level="ERROR"
+{service=~"avatar-.+"} | json | trace_id="4bf92f3577b34da6a3ce929d0e0e4736"
+```
+
+В строке лога `trace_id` — ссылка на трейс в Jaeger, а из спана в Jaeger есть
+переход к логам этого трейса (*Logs for this span*).
+
 ## Разработка
 
 server и worker без переменных окружения не стартуют (например, `database URI
