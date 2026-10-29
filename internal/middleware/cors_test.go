@@ -52,7 +52,7 @@ func TestCORS(t *testing.T) {
 			if gotMethods != tt.wantMethods {
 				t.Errorf("preflight headers = %v, want %v: %v", gotMethods, tt.wantMethods, rec.Header())
 			}
-			if tt.wantOrigin != "" && !tt.preflight && rec.Header().Get("Access-Control-Expose-Headers") != "ETag, Retry-After" {
+			if tt.wantOrigin != "" && !tt.preflight && rec.Header().Get("Access-Control-Expose-Headers") != "ETag, Retry-After, X-Trace-ID" {
 				t.Errorf("Expose-Headers = %q", rec.Header().Get("Access-Control-Expose-Headers"))
 			}
 		})
