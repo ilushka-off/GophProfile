@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -117,6 +118,7 @@ type AvatarService struct {
 	storage       Storage
 	publisher     Publisher
 	maxUploadSize int64
+	metrics       *Metrics
 }
 
 // MaxUploadSizeLimit — верхняя граница лимита на размер файла: сервис
@@ -125,11 +127,15 @@ const MaxUploadSizeLimit = 10 << 20
 
 // NewAvatarService создаёт сервис. maxUploadSize — лимит размера файла в байтах,
 // от 1 до MaxUploadSizeLimit.
-func NewAvatarService(repo AvatarRepository, storage Storage, publisher Publisher, maxUploadSize int64) (*AvatarService, error) {
+func NewAvatarService(repo AvatarRepository, storage Storage, publisher Publisher, maxUploadSize int64, opts ...Option) (*AvatarService, error) {
 	if maxUploadSize < 1 || maxUploadSize > MaxUploadSizeLimit {
 		return nil, fmt.Errorf("max upload size must be between 1 and %d bytes, got %d", MaxUploadSizeLimit, maxUploadSize)
 	}
-	return &AvatarService{repo: repo, storage: storage, publisher: publisher, maxUploadSize: maxUploadSize}, nil
+	s := &AvatarService{repo: repo, storage: storage, publisher: publisher, maxUploadSize: maxUploadSize}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // UploadInput — загружаемый файл. File читается с начала несколько раз,
@@ -153,7 +159,11 @@ func (s *AvatarService) Upload(ctx context.Context, in UploadInput) (a *domain.A
 		observability.AttrUserID.String(in.UserID),
 		observability.AttrFileSize.Int64(in.Size),
 	))
-	defer func() { observability.EndSpan(span, err, IsClientError) }()
+	start := time.Now()
+	defer func() {
+		s.metrics.observeUpload(start, err)
+		observability.EndSpan(span, err, IsClientError)
+	}()
 
 	if in.Size > s.maxUploadSize {
 		return nil, domain.ErrTooLarge
@@ -364,7 +374,10 @@ func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID)
 		observability.AttrUserID.String(userID),
 		observability.AttrAvatarID.String(id.String()),
 	))
-	defer func() { observability.EndSpan(span, err, IsClientError) }()
+	defer func() {
+		s.metrics.observeDelete(err)
+		observability.EndSpan(span, err, IsClientError)
+	}()
 
 	a, err := s.repo.GetByID(ctx, id)
 	if err != nil {
@@ -381,7 +394,10 @@ func (s *AvatarService) Delete(ctx context.Context, userID string, id uuid.UUID)
 // Аватарок нет — domain.ErrNotFound.
 func (s *AvatarService) DeleteCurrent(ctx context.Context, actorID, userID string) (err error) {
 	ctx, span := tracer().Start(ctx, spanDeleteAvatar, trace.WithAttributes(observability.AttrUserID.String(actorID)))
-	defer func() { observability.EndSpan(span, err, IsClientError) }()
+	defer func() {
+		s.metrics.observeDelete(err)
+		observability.EndSpan(span, err, IsClientError)
+	}()
 
 	if actorID != userID {
 		return domain.ErrForbidden

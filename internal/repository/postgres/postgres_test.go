@@ -2,10 +2,13 @@ package postgres
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -139,5 +142,19 @@ func TestOpenPool(t *testing.T) {
 func TestRunMigrationsMalformedURI(t *testing.T) {
 	if err := RunMigrations("://nonsense"); err == nil {
 		t.Fatal("expected error for a malformed database uri")
+	}
+}
+
+// Недоступная база не роняет сбор метрик: серии просто пропускаются.
+func TestStorageCollectorDatabaseDown(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	c := NewStorageCollector(pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if n := testutil.CollectAndCount(c); n != 0 {
+		t.Errorf("collected %d series with the database down, want 0", n)
 	}
 }

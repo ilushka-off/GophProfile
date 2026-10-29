@@ -86,17 +86,18 @@ func run() error {
 	}()
 
 	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), fileStorage, logger)
+	metrics := observability.NewRegistry()
+
 	// Порядок обёрток: временные ошибки повторяются (1, 2, 4 с) вместе с проверкой
 	// message_id; если повторы кончились или ошибка постоянная, аватарка
-	// получает статус failed, а consumer отправляет сообщение в DLQ.
-	handler := processor.MarkFailed(
+	// получает статус failed, а consumer отправляет сообщение в DLQ. Метрики
+	// снаружи всего: считают итоговый исход события.
+	handler := worker.NewMetrics(metrics).Instrument(processor.MarkFailed(
 		broker.WithRetry(
 			worker.Deduplicate(postgres.NewMessageLog(pool), logger, processor.Handle),
 			broker.DefaultRetryDelays, logger,
 		),
-	)
-
-	metrics := observability.NewRegistry()
+	))
 
 	// Сервер метрик живёт, пока идёт обработка: остановка consumer'а
 	// (сигнал или потеря брокера) останавливает и его, и наоборот.

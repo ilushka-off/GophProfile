@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"testing"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -28,6 +29,20 @@ func TestHeadersRoundTrip(t *testing.T) {
 	}
 	if _, ok := got.Headers[broker.HeaderAvatarID]; ok {
 		t.Error("avatar_id is duplicated into Headers")
+	}
+	if lag := time.Since(got.PublishedAt); lag < 0 || lag > time.Minute {
+		t.Errorf("PublishedAt = %v, want about now", got.PublishedAt)
+	}
+	if !got.PublishedAt.Truncate(time.Second).Equal(p.Timestamp.Truncate(time.Second)) {
+		t.Errorf("PublishedAt = %v, AMQP Timestamp = %v", got.PublishedAt, p.Timestamp)
+	}
+}
+
+func TestFromDeliveryFallsBackToTimestamp(t *testing.T) {
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	got := fromDelivery(broker.QueueProcess, amqp.Delivery{Timestamp: ts})
+	if !got.PublishedAt.Equal(ts) {
+		t.Errorf("PublishedAt = %v, want %v", got.PublishedAt, ts)
 	}
 }
 

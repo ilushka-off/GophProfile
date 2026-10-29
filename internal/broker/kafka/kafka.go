@@ -99,7 +99,7 @@ func toProducerMessage(topic string, msg broker.Message, extra ...sarama.RecordH
 }
 
 func fromConsumerMessage(m *sarama.ConsumerMessage) broker.Message {
-	msg := broker.Message{Key: string(m.Key), Body: m.Value, Destination: m.Topic}
+	msg := broker.Message{Key: string(m.Key), Body: m.Value, Destination: m.Topic, PublishedAt: m.Timestamp}
 	for _, h := range m.Headers {
 		switch k := string(h.Key); k {
 		case broker.HeaderEventType:

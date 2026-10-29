@@ -113,12 +113,15 @@ func run() error {
 		return fmt.Errorf("parse web templates: %w", err)
 	}
 
-	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), fileStorage, publisher, cfg.MaxUploadSize)
+	metrics := observability.NewRegistry()
+	metrics.MustRegister(postgres.NewStorageCollector(pool, logger))
+
+	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), fileStorage, publisher,
+		cfg.MaxUploadSize, services.WithMetrics(services.NewMetrics(metrics)))
 	if err != nil {
 		return fmt.Errorf("create avatar service: %w", err)
 	}
 
-	metrics := observability.NewRegistry()
 	router := handlers.NewRouter(logger,
 		handlers.RouterOptions{
 			RateLimitRPS:       cfg.RateLimit.RPS,

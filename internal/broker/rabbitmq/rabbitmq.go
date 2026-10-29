@@ -18,6 +18,9 @@ import (
 // не подвешивал старт и переподключение.
 const dialTimeout = 5 * time.Second
 
+// headerPublishedAt — время публикации с наносекундами (RFC 3339).
+const headerPublishedAt = "x-published-at"
+
 // contentTypeJSON — тело всех событий.
 const contentTypeJSON = "application/json"
 
@@ -79,13 +82,16 @@ func toPublishing(msg broker.Message) amqp.Publishing {
 		headers[k] = v
 	}
 	headers[broker.HeaderAvatarID] = msg.Key
+	now := time.Now().UTC()
+	// Timestamp в AMQP — с точностью до секунды, для задержки обработки мало.
+	headers[headerPublishedAt] = now.Format(time.RFC3339Nano)
 
 	return amqp.Publishing{
 		ContentType:  contentTypeJSON,
 		DeliveryMode: amqp.Persistent,
 		MessageId:    msg.ID,
 		Type:         msg.Type,
-		Timestamp:    time.Now().UTC(),
+		Timestamp:    now,
 		Headers:      headers,
 		Body:         msg.Body,
 	}
@@ -101,9 +107,16 @@ func fromDelivery(queue string, d amqp.Delivery) broker.Message {
 	}
 	key, _ := d.Headers[broker.HeaderAvatarID].(string)
 
+	publishedAt := d.Timestamp
+	if v, ok := d.Headers[headerPublishedAt].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			publishedAt = t
+		}
+	}
+
 	var headers map[string]string
 	for k, v := range d.Headers {
-		if s, ok := v.(string); ok && k != broker.HeaderAvatarID {
+		if s, ok := v.(string); ok && k != broker.HeaderAvatarID && k != headerPublishedAt {
 			if headers == nil {
 				headers = make(map[string]string, len(d.Headers))
 			}
@@ -112,6 +125,6 @@ func fromDelivery(queue string, d amqp.Delivery) broker.Message {
 	}
 	return broker.Message{
 		ID: d.MessageId, Type: msgType, Key: key, Body: d.Body,
-		Headers: headers, Destination: queue,
+		Headers: headers, Destination: queue, PublishedAt: publishedAt,
 	}
 }

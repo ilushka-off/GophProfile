@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Message — сообщение брокера независимо от реализации.
@@ -21,6 +22,9 @@ type Message struct {
 	// Destination — очередь (RabbitMQ) или топик (Kafka), из которого
 	// сообщение прочитано. Заполняет Consumer.
 	Destination string
+	// PublishedAt — когда сообщение опубликовано, по часам publisher'а.
+	// Заполняет Consumer; нулевое, если брокер время не передал.
+	PublishedAt time.Time
 }
 
 // Publisher публикует сообщения в брокер.
