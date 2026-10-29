@@ -226,6 +226,18 @@ Alloy собирает логи всех контейнеров проекта �
 В строке лога `trace_id` — ссылка на трейс в Jaeger, а из спана в Jaeger есть
 переход к логам этого трейса (*Logs for this span*).
 
+Алерт `ErrorLogsSpike` (Loki ruler, `deploy/observability/loki/rules/`)
+срабатывает, если у сервиса больше 10 строк уровня ERROR за 5 минут. Проверить:
+остановить базу и сделать несколько запросов — каждый ответ 500 пишет ошибку.
+
+```bash
+docker compose stop postgres
+for i in $(seq 15); do curl -s -o /dev/null http://localhost:8080/api/v1/users/u/avatars; done
+docker compose start postgres
+```
+
+Через 1–2 минуты алерт виден в Grafana → Alerting → Alert rules (источник Loki).
+
 ## Разработка
 
 server и worker без переменных окружения не стартуют (например, `database URI

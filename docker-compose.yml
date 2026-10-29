@@ -271,6 +271,7 @@ services:
       - "${LOKI_PORT:-3100}:3100"
     volumes:
       - ./deploy/observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - ./deploy/observability/loki/rules:/etc/loki/rules:ro
       - loki-data:/loki
 
   # Alloy читает stdout всех контейнеров проекта через docker socket и шлёт в Loki.

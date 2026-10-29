@@ -13,7 +13,6 @@ common:
   storage:
     filesystem:
       chunks_directory: /loki/chunks
-      rules_directory: /loki/rules
   ring:
     kvstore:
       store: inmemory
@@ -36,6 +35,23 @@ compactor:
   working_directory: /loki/compactor
   retention_enabled: true
   delete_request_store: filesystem
+
+# Правила алертов по логам лежат в репозитории: deploy/observability/loki/rules
+# смонтирован в /etc/loki/rules. Без авторизации арендатор Loki — "fake",
+# поэтому правила — в подкаталоге fake/. Сработавшие алерты уходят
+# в Alertmanager и видны в Grafana → Alerting (источник Loki).
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /etc/loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://alertmanager:9093
+  enable_api: true
+  evaluation_interval: 1m
+  ring:
+    kvstore:
+      store: inmemory
 
 analytics:
   reporting_enabled: false

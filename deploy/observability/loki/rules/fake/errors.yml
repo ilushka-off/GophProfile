@@ -1,0 +1,18 @@
+# Алерты по логам (Loki ruler). Выражения — LogQL.
+groups:
+  - name: gophprofile-logs
+    rules:
+      # Всплеск ошибок: больше 10 строк уровня ERROR у сервиса за 5 минут.
+      # Ошибки, которые сервис ловит сам (необработанная ошибка в хендлере,
+      # сообщение в DLQ, паника), пишутся с level=ERROR и trace_id.
+      - alert: ErrorLogsSpike
+        expr: |
+          sum by (service) (
+            count_over_time({service=~"avatar-service|avatar-worker", level="ERROR"}[5m])
+          ) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Всплеск ошибок в логах {{ $labels.service }}"
+          description: "{{ $value }} строк уровня ERROR за 5 минут. Explore → Loki: {service=\"{{ $labels.service }}\"} | json | level=\"ERROR\""
