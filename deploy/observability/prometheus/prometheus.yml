@@ -1,8 +1,62 @@
+# Опрос раз в 15 секунд, хранение 7 дней (--storage.tsdb.retention.time в compose).
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# server, worker и брокер зависят от профиля (rabbitmq или kafka), поэтому
+# цели ищутся по DNS: имя, которого в запущенном профиле нет, просто не даёт
+# целей, а не висит в /targets как DOWN. instance заменяется на имя сервиса,
+# иначе в нём был бы IP контейнера, меняющийся при каждом перезапуске.
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  - job_name: avatar-service
+    dns_sd_configs:
+      - names: ["avatar-service"]
+        type: A
+        port: 8080
+    relabel_configs:
+      - target_label: instance
+        replacement: avatar-service
+
+  - job_name: avatar-worker
+    dns_sd_configs:
+      - names: ["avatar-worker"]
+        type: A
+        port: 9091
+    relabel_configs:
+      - target_label: instance
+        replacement: avatar-worker
+
+  # Плагин rabbitmq_prometheus; /metrics/per-object — метрики по каждой очереди,
+  # в том числе глубина avatars.dlq.
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    dns_sd_configs:
+      - names: ["rabbitmq"]
+        type: A
+        port: 15692
+    relabel_configs:
+      - target_label: instance
+        replacement: rabbitmq
+
+  - job_name: kafka-exporter
+    dns_sd_configs:
+      - names: ["kafka-exporter"]
+        type: A
+        port: 9308
+    relabel_configs:
+      - target_label: instance
+        replacement: kafka-exporter
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # S3-хранилище. В compose это SeaweedFS (образы MinIO больше не публикуются),
+  # его метрики — на -metricsPort.
+  - job_name: seaweedfs
+    static_configs:
+      - targets: ["seaweedfs:9327"]
