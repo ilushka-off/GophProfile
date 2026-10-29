@@ -11,12 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/services"
+	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/storage/s3"
 	"go-avatar-service/web"
 )
@@ -83,15 +86,16 @@ func run() error {
 	}
 	defer pool.Close()
 
-	storage, err := s3.New(cfg.S3)
+	s3Client, err := s3.New(cfg.S3)
 	if err != nil {
 		return fmt.Errorf("create storage: %w", err)
 	}
 	initCtx, cancelInit := context.WithTimeout(ctx, storageInitTimeout)
 	defer cancelInit()
-	if err := storage.EnsureBucket(initCtx); err != nil {
+	if err := s3Client.EnsureBucket(initCtx); err != nil {
 		return fmt.Errorf("ensure bucket: %w", err)
 	}
+	fileStorage := storage.NewTraced(s3Client, cfg.S3.Bucket, otel.GetTracerProvider())
 
 	publisher, err := factory.NewPublisher(cfg.Broker, logger)
 	if err != nil {
@@ -108,7 +112,7 @@ func run() error {
 		return fmt.Errorf("parse web templates: %w", err)
 	}
 
-	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), storage, publisher, cfg.MaxUploadSize)
+	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), fileStorage, publisher, cfg.MaxUploadSize)
 	if err != nil {
 		return fmt.Errorf("create avatar service: %w", err)
 	}
@@ -119,7 +123,7 @@ func run() error {
 			RateLimitBurst:     cfg.RateLimit.Burst,
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 		},
-		handlers.NewHealthHandler(pool, storage, publisher, cfg.Broker.Kind, logger),
+		handlers.NewHealthHandler(pool, fileStorage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
 		handlers.NewWebHandler(avatarService, templates, cfg.MaxUploadSize, logger),
 	)

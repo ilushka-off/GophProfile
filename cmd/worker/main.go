@@ -9,11 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
+	"go-avatar-service/internal/storage"
 	"go-avatar-service/internal/storage/s3"
 	"go-avatar-service/internal/worker"
 )
@@ -65,10 +68,11 @@ func run() error {
 	}
 	defer pool.Close()
 
-	storage, err := s3.New(cfg.S3)
+	s3Client, err := s3.New(cfg.S3)
 	if err != nil {
 		return fmt.Errorf("create storage: %w", err)
 	}
+	fileStorage := storage.NewTraced(s3Client, cfg.S3.Bucket, otel.GetTracerProvider())
 
 	consumer, err := factory.NewConsumer(cfg.Broker, logger)
 	if err != nil {
@@ -80,7 +84,7 @@ func run() error {
 		}
 	}()
 
-	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), storage, logger)
+	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), fileStorage, logger)
 	// Порядок обёрток: временные ошибки повторяются (1, 2, 4 с) вместе с проверкой
 	// message_id; если повторы кончились или ошибка постоянная, аватарка
 	// получает статус failed, а consumer отправляет сообщение в DLQ.
