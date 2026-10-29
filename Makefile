@@ -8,6 +8,8 @@ MIGRATIONS_DIR := internal/repository/postgres/migrations
 COVER_FILE     := coverage.out
 COVER_MIN      := 50
 BROKER         ?= rabbitmq
+# /metrics worker'а при локальном запуске: METRICS_ADDR из .env (:9091) занят server'ом.
+WORKER_METRICS_ADDR ?= :9092
 # golangci-lint v2 собран под Go 1.26+; версия закреплена, чтобы у всех были одни правила.
 GOLANGCI_LINT  ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
@@ -29,7 +31,8 @@ build: ## Собрать server и worker в bin/
 run: ## Запустить server локально
 	go run ./cmd/server
 
-run-worker: ## Запустить worker локально
+run-worker: METRICS_ADDR = $(WORKER_METRICS_ADDR)
+run-worker: ## Запустить worker локально (/metrics на WORKER_METRICS_ADDR)
 	go run ./cmd/worker
 
 test: ## Все тесты, включая интеграционные (нужен Docker для testcontainers)
@@ -62,6 +65,7 @@ migrate-down: ## Откатить последнюю миграцию
 up: ## Поднять окружение в docker compose (BROKER=rabbitmq|kafka)
 	$(COMPOSE) up -d --build
 
+up-observability: OTLP_ENDPOINT = jaeger:4317
 up-observability: ## Поднять окружение вместе с профилем observability
 	$(COMPOSE) --profile observability up -d --build
 

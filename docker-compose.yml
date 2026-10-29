@@ -20,8 +20,10 @@ x-app-env: &app-env
   S3_USE_SSL: "false"
   RABBITMQ_URL: amqp://${RABBITMQ_USER:-gophprofile}:${RABBITMQ_PASSWORD:-gophprofile}@rabbitmq:5672/
   KAFKA_BROKERS: kafka:9092
-  # Без профиля observability Jaeger нет: спаны теряются, сервис работает.
-  OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
+  # Jaeger есть только в профиле observability, поэтому endpoint задаётся вместе
+  # с ним (make up-observability ставит jaeger:4317). Пусто — трейсы не
+  # отправляются, и в логе нет ошибок «lookup jaeger» на каждый батч спанов.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
   OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
   DEPLOYMENT_ENVIRONMENT: docker
 

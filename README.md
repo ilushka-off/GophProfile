@@ -94,10 +94,11 @@ server и worker читают одни и те же переменные.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `jaeger:4317` | Куда отправлять трейсы по OTLP gRPC (`host:port` или `http://host:port`). Пусто — трейсы не отправляются |
 | `OTEL_TRACES_SAMPLER_ARG` | `1` | Доля записываемых трейсов от 0 до 1; продолжение входящего трейса решает родитель |
 | `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment.name` в трейсах |
-| `METRICS_ADDR` | `:9091` | Адрес `/metrics` у worker'а (у server метрики на `HTTP_ADDR`) |
+| `METRICS_ADDR` | `:9091` | Адрес отдельного HTTP-сервера с `/metrics`. У server он должен отличаться от `HTTP_ADDR` и не быть доступен клиентам: в метриках есть `user_id`. `make run-worker` поднимает метрики worker'а на `:9092` (`WORKER_METRICS_ADDR`) |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
-`APP_PORT` из `.env.example` настраивают контейнеры docker compose.
+`APP_PORT` из `.env.example` настраивают контейнеры docker compose, а `OTLP_ENDPOINT` —
+`OTEL_EXPORTER_OTLP_ENDPOINT` server'а и worker'а в compose (по умолчанию пусто).
 
 ## API
 
@@ -160,8 +161,9 @@ curl -s http://localhost:8080/health
 Jaeger, Loki, Alloy, Grafana и cAdvisor (порты — в `.env.example`):
 
 ```bash
-docker compose --profile observability --profile rabbitmq up --build   # или с kafka
-make up-observability                                                  # то же через make
+make up-observability                     # BROKER=kafka — с Kafka
+# то же вручную; без OTLP_ENDPOINT трейсы в Jaeger не попадут
+OTLP_ENDPOINT=jaeger:4317 docker compose --profile observability --profile rabbitmq up --build
 ```
 
 | Адрес | Что там |
@@ -170,10 +172,13 @@ make up-observability                                                  # то ж
 | http://localhost:16686/ | Jaeger UI: трейсы и граф зависимостей (System Architecture) |
 | http://localhost:9090/targets | Prometheus: все цели должны быть UP |
 | http://localhost:9093/ | Alertmanager |
-| http://localhost:8080/metrics | Метрики server (worker — на `:9091` внутри сети compose) |
+Метрики server и worker отдаются на `:9091` только внутри сети compose: порт
+не публикуется, потому что `avatars_storage_bytes` раскрывает `user_id` всех
+пользователей. Посмотреть их можно в Prometheus или командой
+`docker compose exec server-rabbitmq wget -qO- http://127.0.0.1:9091/metrics`.
 
-Без профиля сервис работает как раньше: трейсы, которые некуда отправить,
-теряются, ошибки экспорта пишутся в лог.
+Без профиля сервис работает как раньше: `OTLP_ENDPOINT` пуст, трейсы создаются
+(`trace_id` есть в логах и в `X-Trace-ID`), но никуда не отправляются.
 
 ### Трейсы
 
@@ -219,11 +224,18 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 | `http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight` | RED по `method`, `route` (шаблон маршрута), `status` |
 | `avatars_uploads_total{status}` | Загрузки: `success`, `rejected` (файл не прошёл проверки), `error` (сбой) |
 | `avatars_upload_duration_seconds`, `avatars_deletes_total` | Длительность успешной загрузки, удаления |
-| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_total` | Объём оригиналов неудалённых аватарок (считается в БД при опросе) |
+| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_total` | Объём оригиналов неудалённых аватарок (считается в БД при опросе). См. оговорку ниже |
 | `avatars_processing_total{type,status}`, `avatars_processing_duration_seconds` | События worker'а: успех или DLQ, время обработки с повторами |
 | `avatars_processing_lag_seconds` | Сколько событие ждало в брокере до начала обработки |
 | `pgxpool_*` | Пул соединений PostgreSQL: занятые, свободные, ожидание |
 | `go_*`, `process_*` | Go runtime и процесс |
+
+`avatars_storage_bytes{user_id}` — одна серия на каждого пользователя, число
+серий растёт без ограничения. Для учебного проекта это допустимо, но в реальной
+системе так делать нельзя: Prometheus не рассчитан на миллионы серий одной
+метрики, а каждый опрос делает `GROUP BY user_id` по всей таблице. Там стоит
+оставить только `avatars_storage_bytes_total` или отдавать топ-N пользователей,
+а объём по пользователю брать из БД.
 
 Дашборды Grafana лежат в `deploy/observability/grafana/dashboards` и
 подключаются при старте (правки в UI не сохраняются):
