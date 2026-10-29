@@ -114,6 +114,7 @@ services:
       timeout: 3s
       retries: 10
 
+  # Метрики SeaweedFS (аналог /minio/v2/metrics/cluster у MinIO) — на :9327.
   seaweedfs:
     image: chrislusf/seaweedfs:4.48
     container_name: gophprofile-seaweedfs
@@ -125,7 +126,7 @@ services:
         cat > /etc/seaweedfs/s3.json <<JSON
         {"identities":[{"name":"app","credentials":[{"accessKey":"$${S3_ACCESS_KEY}","secretKey":"$${S3_SECRET_KEY}"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
         JSON
-        exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+        exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -metricsPort=9327
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-gophprofile}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-gophprofile-secret}
@@ -172,6 +173,8 @@ services:
       - "${RABBITMQ_UI_PORT:-15672}:15672" # management UI
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # Плагин rabbitmq_prometheus отдаёт метрики на :15692 (глубина очередей и DLQ).
+      - ./deploy/observability/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s

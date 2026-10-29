@@ -87,6 +87,7 @@ func run() error {
 
 	processor := worker.NewProcessor(postgres.NewAvatarRepository(pool), fileStorage, logger)
 	metrics := observability.NewRegistry()
+	metrics.MustRegister(postgres.NewPoolCollector(pool))
 
 	// Порядок обёрток: временные ошибки повторяются (1, 2, 4 с) вместе с проверкой
 	// message_id; если повторы кончились или ошибка постоянная, аватарка

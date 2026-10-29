@@ -114,7 +114,7 @@ func run() error {
 	}
 
 	metrics := observability.NewRegistry()
-	metrics.MustRegister(postgres.NewStorageCollector(pool, logger))
+	metrics.MustRegister(postgres.NewStorageCollector(pool, logger), postgres.NewPoolCollector(pool))
 
 	avatarService, err := services.NewAvatarService(postgres.NewAvatarRepository(pool), fileStorage, publisher,
 		cfg.MaxUploadSize, services.WithMetrics(services.NewMetrics(metrics)))
