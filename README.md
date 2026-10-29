@@ -156,11 +156,12 @@ curl -s http://localhost:8080/health
 
 ## Наблюдаемость
 
-Профиль `observability` поднимает рядом с сервисом Prometheus, Jaeger, Loki,
-Alloy, Grafana и cAdvisor:
+Профиль `observability` поднимает рядом с сервисом Prometheus, Alertmanager,
+Jaeger, Loki, Alloy, Grafana и cAdvisor (порты — в `.env.example`):
 
 ```bash
 docker compose --profile observability --profile rabbitmq up --build   # или с kafka
+make up-observability                                                  # то же через make
 ```
 
 | Адрес | Что там |
@@ -168,6 +169,7 @@ docker compose --profile observability --profile rabbitmq up --build   # или 
 | http://localhost:3000/ | Grafana: дашборды в папке GophProfile (без входа; админ — `GRAFANA_ADMIN_*`) |
 | http://localhost:16686/ | Jaeger UI: трейсы и граф зависимостей (System Architecture) |
 | http://localhost:9090/targets | Prometheus: все цели должны быть UP |
+| http://localhost:9093/ | Alertmanager |
 | http://localhost:8080/metrics | Метрики server (worker — на `:9091` внутри сети compose) |
 
 Без профиля сервис работает как раньше: трейсы, которые некуда отправить,
@@ -234,6 +236,24 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 - **Business KPIs** — загрузки в минуту, доля отказов, удаления, объём
   хранилища и топ-10 пользователей, время создания миниатюр и processing lag.
 
+### Алерты
+
+Правила Prometheus — в `deploy/observability/prometheus/rules/alerts.yml`,
+сработавшие алерты уходят в Alertmanager (http://localhost:9093) и видны
+в Grafana → Alerting.
+
+| Алерт | Условие |
+| --- | --- |
+| `HighErrorRate` | Больше 5% ответов 5xx за 5 минут (по сумме `rate()` всех маршрутов) |
+| `HighResponseTime` | p95 длительности ответа больше 1 с за 5 минут |
+| `DLQNotEmpty` | В `avatars.dlq` или `avatar-events.dlq` есть сообщения |
+| `ServiceDown` | server или worker не отвечает на `/metrics` или не запущен |
+| `ErrorLogsSpike` | Больше 10 строк ERROR за 5 минут (Loki ruler, см. «Логи») |
+
+Пример получателя в `deploy/observability/alertmanager/alertmanager.yml` — webhook
+на `http://host.docker.internal:5001/alerts`. Тесты правил — `make alerts-test`
+(promtool в Docker), они же идут в CI.
+
 ### Логи
 
 server и worker пишут JSON в stdout: `time`, `level`, `msg`, `service`
@@ -281,6 +301,7 @@ make test         # все тесты, включая интеграционны
 make test-short   # только unit-тесты, без контейнеров
 make cover        # покрытие; падает, если ниже 50%
 make lint         # golangci-lint v2 (конфиг .golangci.yml)
+make alerts-test  # promtool: конфиг Prometheus и тесты алертов (нужен Docker)
 ```
 
 Интеграционные тесты поднимают PostgreSQL, SeaweedFS, RabbitMQ и Kafka через

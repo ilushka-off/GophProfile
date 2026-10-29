@@ -51,3 +51,14 @@ datasources:
         spanEndTimeShift: 5m
         customQuery: true
         query: '{service=~"avatar-service|avatar-worker"} |= "$${__trace.traceId}"'
+
+  # Сработавшие алерты Prometheus и Loki ruler — в Grafana → Alerting.
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

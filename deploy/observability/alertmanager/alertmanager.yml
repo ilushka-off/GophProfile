@@ -1,0 +1,23 @@
+# Маршрутизация алертов Prometheus и Loki ruler.
+route:
+  receiver: webhook
+  group_by: [alertname, job, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+# Пока сервис лежит целиком, его 5xx и задержки — следствие, а не отдельная беда.
+inhibit_rules:
+  - source_matchers: [alertname="ServiceDown"]
+    target_matchers: [alertname=~"HighErrorRate|HighResponseTime"]
+    equal: [job]
+
+receivers:
+  # Пример: POST с JSON алертов на webhook. Для проверки можно запустить
+  # на хосте любой приёмник на порту 5001, например:
+  #   python -m http.server 5001   (ответит 501, но запрос будет виден в выводе)
+  # В реальном окружении здесь Slack, Telegram, PagerDuty и т. п.
+  - name: webhook
+    webhook_configs:
+      - url: http://host.docker.internal:5001/alerts
+        send_resolved: true

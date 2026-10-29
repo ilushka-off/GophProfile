@@ -1,0 +1,64 @@
+# Алерты Prometheus. Тесты: deploy/observability/prometheus/tests (make alerts-test).
+groups:
+  - name: gophprofile
+    rules:
+      # Больше 5% ответов 5xx за 5 минут. Доля считается по сумме rate()
+      # всех серий сервиса: среднее долей по маршрутам дало бы вес маршруту
+      # с одним запросом наравне с самым нагруженным.
+      - alert: HighErrorRate
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (job) (rate(http_requests_total[5m]))
+            > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }}: больше 5% ответов 5xx"
+          description: "Доля ответов 5xx выше 5% последние 5 минут. Дашборд RED покажет маршрут, Loki — ошибки."
+
+      # p95 длительности выше секунды. Квантиль считается по rate() бакетов,
+      # просуммированных по всем маршрутам: по сырым счётчикам _bucket он
+      # показывал бы распределение за всё время работы, а не за 5 минут.
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, job) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }}: p95 ответа больше 1 с"
+          description: "95-й перцентиль длительности HTTP-запросов выше секунды последние 5 минут."
+
+      # В DLQ есть сообщения: worker не смог их обработать. Работает для
+      # обоих брокеров — серии есть только у запущенного.
+      - alert: DLQNotEmpty
+        expr: |
+          sum(rabbitmq_queue_messages{queue="avatars.dlq"}) > 0
+          or
+          (
+            sum(kafka_topic_partition_current_offset{topic="avatar-events.dlq"})
+              - sum(kafka_topic_partition_oldest_offset{topic="avatar-events.dlq"})
+          ) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "В DLQ есть необработанные события"
+          description: "worker отправил события в DLQ (avatars.dlq или avatar-events.dlq). Причина — в заголовке x-error и в логах worker'а."
+
+      # Сервис не отвечает на /metrics или вовсе пропал: остановленный
+      # контейнер исчезает из DNS, и серии up у него нет.
+      - alert: ServiceDown
+        expr: |
+          up{job=~"avatar-service|avatar-worker"} == 0
+          or absent(up{job="avatar-service"})
+          or absent(up{job="avatar-worker"})
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} недоступен"
+          description: "Prometheus не может опросить {{ $labels.job }} больше минуты."

@@ -319,6 +319,29 @@ services:
       - loki
       - jaeger
 
+  # Алерты Prometheus (deploy/observability/prometheus/rules) и Loki ruler.
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    container_name: gophprofile-alertmanager
+    restart: unless-stopped
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./deploy/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    # Пример webhook-приёмника в конфиге шлёт алерты на хост.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9093/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
   # CPU и память контейнеров.
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.55.1
@@ -369,3 +392,4 @@ volumes:
   loki-data:
   alloy-data:
   grafana-data:
+  alertmanager-data:
