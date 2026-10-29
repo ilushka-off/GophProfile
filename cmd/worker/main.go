@@ -39,14 +39,14 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	svc := observability.Service{Name: observability.ServiceWorker, Version: version}
+	logger := observability.NewLogger(os.Stdout, cfg.LogLevel, svc)
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTelemetry, err := observability.Setup(ctx, cfg.Observability,
-		observability.Service{Name: observability.ServiceWorker, Version: version})
+	shutdownTelemetry, err := observability.Setup(ctx, cfg.Observability, svc)
 	if err != nil {
 		return fmt.Errorf("setup telemetry: %w", err)
 	}
