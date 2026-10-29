@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"golang.org/x/sync/errgroup"
 
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
@@ -128,7 +129,6 @@ func run() error {
 			RateLimitBurst:     cfg.RateLimit.Burst,
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 			HTTPMetrics:        middleware.NewHTTPMetrics(metrics),
-			MetricsHandler:     observability.MetricsHandler(metrics),
 		},
 		handlers.NewHealthHandler(pool, fileStorage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
@@ -144,9 +144,24 @@ func run() error {
 		IdleTimeout:       idleTimeout,
 	}
 
+	// /metrics — на отдельном адресе, который не публикуется наружу: в метриках
+	// есть user_id. Остановка одного сервера останавливает и другой.
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		slog.Info("serving metrics", "addr", cfg.Observability.MetricsAddr)
+		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics)
+	})
+	g.Go(func() error {
+		slog.Info("starting server", "addr", cfg.HTTPAddr, "broker", cfg.Broker.Kind)
+		return serveHTTP(ctx, srv)
+	})
+	return g.Wait()
+}
+
+// serveHTTP держит srv до отмены ctx и затем корректно его останавливает.
+func serveHTTP(ctx context.Context, srv *http.Server) error {
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("starting server", "addr", cfg.HTTPAddr, "broker", cfg.Broker.Kind)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -159,7 +174,7 @@ func run() error {
 	}
 
 	slog.Info("shutting down server")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {

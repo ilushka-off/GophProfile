@@ -67,8 +67,8 @@ type ObservabilityConfig struct {
 	TracesSampleRatio float64
 	// Environment — deployment.environment в resource: local, staging, production.
 	Environment string
-	// MetricsAddr — адрес отдельного HTTP-сервера с /metrics у worker'а.
-	// У server метрики на его основном адресе.
+	// MetricsAddr — адрес отдельного HTTP-сервера с /metrics. У server он не
+	// совпадает с HTTP_ADDR: метрики (в них есть user_id) не должны быть видны клиентам API.
 	MetricsAddr string
 }
 

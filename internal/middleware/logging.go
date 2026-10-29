@@ -39,7 +39,8 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // routePattern возвращает шаблон маршрута chi, например /api/v1/avatars/{avatar_id}.
-// Пусто, если маршрут не найден или запрос ещё не прошёл роутинг.
+// Пусто, если запрос не попал ни в маршрут, ни в подроутер или ещё не прошёл
+// роутинг; для неизвестного пути внутри подроутера — его шаблон, /api/v1/*.
 func routePattern(r *http.Request) string {
 	if rctx := chi.RouteContext(r.Context()); rctx != nil {
 		return rctx.RoutePattern()

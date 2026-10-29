@@ -24,7 +24,8 @@ scrape_configs:
     dns_sd_configs:
       - names: ["avatar-service"]
         type: A
-        port: 8080
+        # /metrics server'а — на METRICS_ADDR, а не на порту API: наружу он не публикуется.
+        port: 9091
     relabel_configs:
       - target_label: instance
         replacement: avatar-service

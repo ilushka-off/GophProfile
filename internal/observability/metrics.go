@@ -12,7 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Таймауты отдельного HTTP-сервера метрик worker'а.
+// Таймауты отдельного HTTP-сервера метрик.
 const (
 	metricsReadHeaderTimeout = 5 * time.Second
 	metricsShutdownTimeout   = 5 * time.Second
@@ -40,7 +40,8 @@ func MetricsHandler(reg *prometheus.Registry) http.Handler {
 }
 
 // ServeMetrics поднимает HTTP-сервер с /metrics на addr и держит его до
-// отмены ctx. Нужен worker'у: своего HTTP-сервера у него нет.
+// отмены ctx. У server это отдельный от API адрес, который не публикуется
+// наружу, у worker'а — единственный HTTP-сервер.
 func ServeMetrics(ctx context.Context, addr string, reg *prometheus.Registry) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", MetricsHandler(reg))

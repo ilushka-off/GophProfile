@@ -11,11 +11,9 @@ import (
 	"go-avatar-service/internal/middleware"
 )
 
-// Служебные пути вне API: их не трейсят и не считают в метриках запросов.
-const (
-	pathHealth  = "/health"
-	pathMetrics = "/metrics"
-)
+// pathHealth — служебный путь вне API: его не трейсят и не считают в метриках
+// запросов. /metrics здесь нет: он на отдельном адресе (METRICS_ADDR).
+const pathHealth = "/health"
 
 // RouterOptions — настройки защитных middleware.
 type RouterOptions struct {
@@ -27,8 +25,6 @@ type RouterOptions struct {
 	CORSAllowedOrigins []string
 	// HTTPMetrics считает RED-метрики запросов. nil — не считать.
 	HTTPMetrics *middleware.HTTPMetrics
-	// MetricsHandler отдаёт метрики на GET /metrics. nil — маршрута нет.
-	MetricsHandler http.Handler
 }
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
@@ -37,9 +33,9 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	// Трейсинг первым: спан из контекста нужен логам (trace_id) и всем ниже.
-	r.Use(middleware.Tracing(pathHealth, pathMetrics))
+	r.Use(middleware.Tracing(pathHealth))
 	if opts.HTTPMetrics != nil {
-		r.Use(opts.HTTPMetrics.Middleware(pathHealth, pathMetrics))
+		r.Use(opts.HTTPMetrics.Middleware(pathHealth))
 	}
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
 	r.Use(middleware.Logger(logger))
@@ -56,10 +52,6 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 
 	// /health не ограничивается: его дёргает healthcheck docker compose.
 	r.Get(pathHealth, healthHandler.Check)
-	// /metrics тоже без лимита: Prometheus опрашивает его каждые 15 секунд.
-	if opts.MetricsHandler != nil {
-		r.Method(http.MethodGet, pathMetrics, opts.MetricsHandler)
-	}
 
 	// Один лимитер на API и веб: у клиента одно ведро на весь сервис.
 	rateLimit := middleware.RateLimit(opts.RateLimitRPS, opts.RateLimitBurst, func(w http.ResponseWriter, _ *http.Request) {
