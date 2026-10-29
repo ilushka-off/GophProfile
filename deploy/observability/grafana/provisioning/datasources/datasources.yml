@@ -1,0 +1,53 @@
+# Источники данных и связи между ними. В provisioning Grafana подставляет
+# переменные окружения вида $VAR, поэтому $ в выражениях Grafana записан как $$.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+      # Точки exemplar на графиках длительности ведут в трейс.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: jaeger
+          urlDisplayLabel: Трейс в Jaeger
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      # trace_id из JSON строки лога становится ссылкой на трейс.
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id":"(\w+)"'
+          datasourceUid: jaeger
+          url: "$${__value.raw}"
+          urlDisplayLabel: Трейс в Jaeger
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      nodeGraph:
+        enabled: true
+      # Из спана — в логи этого трейса в Loki.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        customQuery: true
+        query: '{service=~"avatar-service|avatar-worker"} |= "$${__trace.traceId}"'
