@@ -25,6 +25,10 @@ type RouterOptions struct {
 	RateLimitBurst int
 	// CORSAllowedOrigins — origins, которым браузер разрешает запросы. Пусто — CORS выключен.
 	CORSAllowedOrigins []string
+	// HTTPMetrics считает RED-метрики запросов. nil — не считать.
+	HTTPMetrics *middleware.HTTPMetrics
+	// MetricsHandler отдаёт метрики на GET /metrics. nil — маршрута нет.
+	MetricsHandler http.Handler
 }
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
@@ -34,6 +38,9 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 	r.Use(chimw.RequestID)
 	// Трейсинг первым: спан из контекста нужен логам (trace_id) и всем ниже.
 	r.Use(middleware.Tracing(pathHealth, pathMetrics))
+	if opts.HTTPMetrics != nil {
+		r.Use(opts.HTTPMetrics.Middleware(pathHealth, pathMetrics))
+	}
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.Recoverer(logger))
@@ -49,6 +56,10 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 
 	// /health не ограничивается: его дёргает healthcheck docker compose.
 	r.Get(pathHealth, healthHandler.Check)
+	// /metrics тоже без лимита: Prometheus опрашивает его каждые 15 секунд.
+	if opts.MetricsHandler != nil {
+		r.Method(http.MethodGet, pathMetrics, opts.MetricsHandler)
+	}
 
 	// Один лимитер на API и веб: у клиента одно ведро на весь сервис.
 	rateLimit := middleware.RateLimit(opts.RateLimitRPS, opts.RateLimitBurst, func(w http.ResponseWriter, _ *http.Request) {

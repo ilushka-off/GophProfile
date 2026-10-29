@@ -16,6 +16,7 @@ import (
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
 	"go-avatar-service/internal/handlers"
+	"go-avatar-service/internal/middleware"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/services"
@@ -117,11 +118,14 @@ func run() error {
 		return fmt.Errorf("create avatar service: %w", err)
 	}
 
+	metrics := observability.NewRegistry()
 	router := handlers.NewRouter(logger,
 		handlers.RouterOptions{
 			RateLimitRPS:       cfg.RateLimit.RPS,
 			RateLimitBurst:     cfg.RateLimit.Burst,
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+			HTTPMetrics:        middleware.NewHTTPMetrics(metrics),
+			MetricsHandler:     observability.MetricsHandler(metrics),
 		},
 		handlers.NewHealthHandler(pool, fileStorage, publisher, cfg.Broker.Kind, logger),
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),

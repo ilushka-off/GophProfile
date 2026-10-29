@@ -23,7 +23,7 @@ func setBaseEnv(t *testing.T) {
 	for _, k := range []string{
 		"HTTP_ADDR", "LOG_LEVEL", "MAX_UPLOAD_SIZE", "S3_REGION", "S3_USE_SSL",
 		"BROKER", "KAFKA_BROKERS", "RATE_LIMIT_RPS", "RATE_LIMIT_BURST", "CORS_ALLOWED_ORIGINS",
-		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG", "DEPLOYMENT_ENVIRONMENT",
+		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG", "DEPLOYMENT_ENVIRONMENT", "METRICS_ADDR",
 	} {
 		unsetEnv(t, k)
 	}
@@ -78,6 +78,7 @@ func TestLoadDefaults(t *testing.T) {
 			OTLPEndpoint:      defaultOTLPEndpoint,
 			TracesSampleRatio: defaultTracesSampleRatio,
 			Environment:       defaultEnvironment,
+			MetricsAddr:       defaultMetricsAddr,
 		},
 	}
 	if !reflect.DeepEqual(cfg, want) {
@@ -99,6 +100,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
 	t.Setenv("DEPLOYMENT_ENVIRONMENT", "staging")
+	t.Setenv("METRICS_ADDR", ":9999")
 
 	cfg, err := Load()
 	if err != nil {
@@ -126,7 +128,7 @@ func TestLoadOverrides(t *testing.T) {
 	if want := []string{"https://app.example", "http://localhost:3000"}; !reflect.DeepEqual(cfg.CORSAllowedOrigins, want) {
 		t.Errorf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
 	}
-	if want := (ObservabilityConfig{TracesSampleRatio: 0.25, Environment: "staging"}); cfg.Observability != want {
+	if want := (ObservabilityConfig{TracesSampleRatio: 0.25, Environment: "staging", MetricsAddr: ":9999"}); cfg.Observability != want {
 		t.Errorf("Observability = %+v, want %+v", cfg.Observability, want)
 	}
 }
@@ -152,6 +154,7 @@ func TestLoadErrors(t *testing.T) {
 		{name: "zero burst", env: map[string]string{"RATE_LIMIT_BURST": "0"}},
 		{name: "origin with path", env: map[string]string{"CORS_ALLOWED_ORIGINS": "https://app.example/"}},
 		{name: "origin without scheme", env: map[string]string{"CORS_ALLOWED_ORIGINS": "app.example"}},
+		{name: "empty metrics addr", env: map[string]string{"METRICS_ADDR": ""}},
 		{name: "bad sampler arg", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "all"}},
 		{name: "sampler arg above one", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "1.5"}},
 	}

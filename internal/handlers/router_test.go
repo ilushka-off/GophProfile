@@ -5,6 +5,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"go-avatar-service/internal/middleware"
 )
 
 // Логика /health проверяется в health_test.go, здесь — только что маршруты подключены.
@@ -134,5 +139,43 @@ func TestRouterCORSPreflight(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-User-ID") {
 		t.Errorf("Allow-Headers = %q, want X-User-ID", got)
+	}
+}
+
+// /metrics отдаётся без лимита запросов, а служебные пути в метрики не попадают.
+func TestRouterMetrics(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	router := NewRouter(discardLogger(), RouterOptions{
+		RateLimitRPS:   0.1,
+		RateLimitBurst: 1,
+		HTTPMetrics:    middleware.NewHTTPMetrics(reg),
+		MetricsHandler: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}),
+	},
+		healthyHandler(),
+		NewAvatarHandler(&fakeAvatarService{}, testMaxUploadSize, discardLogger()),
+		newTestWebHandler(&fakeAvatarService{}),
+	)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	get("/api/v1/users/u/avatars")
+	get("/health")
+	var rec *httptest.ResponseRecorder
+	for range 3 {
+		rec = get("/metrics")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("/metrics status = %d, must not be rate limited", rec.Code)
+		}
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `http_requests_total{method="GET",route="/api/v1/users/{user_id}/avatars",status="200"} 1`) {
+		t.Errorf("API request is not counted:\n%s", body)
+	}
+	if strings.Contains(body, `route="/health"`) || strings.Contains(body, `route="/metrics"`) {
+		t.Errorf("service paths are counted:\n%s", body)
 	}
 }

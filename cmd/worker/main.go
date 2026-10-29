@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"golang.org/x/sync/errgroup"
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/broker/factory"
@@ -95,9 +96,27 @@ func run() error {
 		),
 	)
 
-	slog.Info("starting worker", "broker", cfg.Broker.Kind)
-	if err := consumer.Consume(ctx, handler); err != nil {
-		return fmt.Errorf("consume: %w", err)
+	metrics := observability.NewRegistry()
+
+	// Сервер метрик живёт, пока идёт обработка: остановка consumer'а
+	// (сигнал или потеря брокера) останавливает и его, и наоборот.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		slog.Info("serving metrics", "addr", cfg.Observability.MetricsAddr)
+		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics)
+	})
+	g.Go(func() error {
+		defer cancel()
+		slog.Info("starting worker", "broker", cfg.Broker.Kind)
+		if err := consumer.Consume(ctx, handler); err != nil {
+			return fmt.Errorf("consume: %w", err)
+		}
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return err
 	}
 	slog.Info("shutting down worker")
 	return nil

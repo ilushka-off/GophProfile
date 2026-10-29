@@ -13,6 +13,7 @@ import (
 // Значения по умолчанию.
 const (
 	defaultHTTPAddr      = ":8080"
+	defaultMetricsAddr   = ":9091"
 	defaultMaxUploadSize = 10 << 20 // 10 MiB
 	defaultS3Region      = "us-east-1"
 
@@ -66,6 +67,9 @@ type ObservabilityConfig struct {
 	TracesSampleRatio float64
 	// Environment — deployment.environment в resource: local, staging, production.
 	Environment string
+	// MetricsAddr — адрес отдельного HTTP-сервера с /metrics у worker'а.
+	// У server метрики на его основном адресе.
+	MetricsAddr string
 }
 
 // S3Config — параметры запуска S3.
@@ -191,6 +195,10 @@ func loadObservability() (ObservabilityConfig, error) {
 		OTLPEndpoint:      getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTLPEndpoint),
 		TracesSampleRatio: defaultTracesSampleRatio,
 		Environment:       getEnv("DEPLOYMENT_ENVIRONMENT", defaultEnvironment),
+		MetricsAddr:       getEnv("METRICS_ADDR", defaultMetricsAddr),
+	}
+	if cfg.MetricsAddr == "" {
+		return ObservabilityConfig{}, errors.New("METRICS_ADDR: must not be empty")
 	}
 	if v := getEnv("OTEL_TRACES_SAMPLER_ARG", ""); v != "" {
 		ratio, err := strconv.ParseFloat(v, 64)

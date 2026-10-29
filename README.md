@@ -94,6 +94,7 @@ server и worker читают одни и те же переменные.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `jaeger:4317` | Куда отправлять трейсы по OTLP gRPC (`host:port` или `http://host:port`). Пусто — трейсы не отправляются |
 | `OTEL_TRACES_SAMPLER_ARG` | `1` | Доля записываемых трейсов от 0 до 1; продолжение входящего трейса решает родитель |
 | `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment.name` в трейсах |
+| `METRICS_ADDR` | `:9091` | Адрес `/metrics` у worker'а (у server метрики на `HTTP_ADDR`) |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
 `APP_PORT` из `.env.example` настраивают контейнеры docker compose.
