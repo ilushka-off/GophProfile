@@ -72,26 +72,46 @@ func declareTopology(ch *amqp.Channel) error {
 }
 
 // toPublishing переводит сообщение в формат AMQP: тип — в routing key и Type,
-// message_id — в MessageId, avatar_id — в заголовок.
+// message_id — в MessageId, avatar_id и msg.Headers — в заголовки.
 func toPublishing(msg broker.Message) amqp.Publishing {
+	headers := make(amqp.Table, len(msg.Headers)+1)
+	for k, v := range msg.Headers {
+		headers[k] = v
+	}
+	headers[broker.HeaderAvatarID] = msg.Key
+
 	return amqp.Publishing{
 		ContentType:  contentTypeJSON,
 		DeliveryMode: amqp.Persistent,
 		MessageId:    msg.ID,
 		Type:         msg.Type,
 		Timestamp:    time.Now().UTC(),
-		Headers:      amqp.Table{broker.HeaderAvatarID: msg.Key},
+		Headers:      headers,
 		Body:         msg.Body,
 	}
 }
 
 // fromDelivery — обратное преобразование для worker. Тип берётся из Type,
 // а если его нет (сообщение опубликовано не нами) — из routing key.
-func fromDelivery(d amqp.Delivery) broker.Message {
+// Строковые заголовки, кроме avatar_id, попадают в Headers.
+func fromDelivery(queue string, d amqp.Delivery) broker.Message {
 	msgType := d.Type
 	if msgType == "" {
 		msgType = d.RoutingKey
 	}
 	key, _ := d.Headers[broker.HeaderAvatarID].(string)
-	return broker.Message{ID: d.MessageId, Type: msgType, Key: key, Body: d.Body}
+
+	var headers map[string]string
+	for k, v := range d.Headers {
+		if s, ok := v.(string); ok && k != broker.HeaderAvatarID {
+			if headers == nil {
+				headers = make(map[string]string, len(d.Headers))
+			}
+			headers[k] = s
+		}
+	}
+	return broker.Message{
+		ID: d.MessageId, Type: msgType, Key: key, Body: d.Body,
+		Headers: headers, Destination: queue,
+	}
 }

@@ -79,11 +79,17 @@ func ensureTopics(brokers []string, cfg *sarama.Config) error {
 
 // toProducerMessage кладёт событие в топик с ключом avatar_id: все события
 // одной аватарки попадают в одну партицию и обрабатываются по порядку.
+// Тип, message_id и msg.Headers едут в заголовках записи.
 func toProducerMessage(topic string, msg broker.Message, extra ...sarama.RecordHeader) *sarama.ProducerMessage {
-	headers := append([]sarama.RecordHeader{
-		{Key: []byte(broker.HeaderEventType), Value: []byte(msg.Type)},
-		{Key: []byte(broker.HeaderMessageID), Value: []byte(msg.ID)},
-	}, extra...)
+	headers := make([]sarama.RecordHeader, 0, 2+len(msg.Headers)+len(extra))
+	headers = append(headers,
+		sarama.RecordHeader{Key: []byte(broker.HeaderEventType), Value: []byte(msg.Type)},
+		sarama.RecordHeader{Key: []byte(broker.HeaderMessageID), Value: []byte(msg.ID)},
+	)
+	for k, v := range msg.Headers {
+		headers = append(headers, sarama.RecordHeader{Key: []byte(k), Value: []byte(v)})
+	}
+	headers = append(headers, extra...)
 	return &sarama.ProducerMessage{
 		Topic:   topic,
 		Key:     sarama.StringEncoder(msg.Key),
@@ -93,13 +99,18 @@ func toProducerMessage(topic string, msg broker.Message, extra ...sarama.RecordH
 }
 
 func fromConsumerMessage(m *sarama.ConsumerMessage) broker.Message {
-	msg := broker.Message{Key: string(m.Key), Body: m.Value}
+	msg := broker.Message{Key: string(m.Key), Body: m.Value, Destination: m.Topic}
 	for _, h := range m.Headers {
-		switch string(h.Key) {
+		switch k := string(h.Key); k {
 		case broker.HeaderEventType:
 			msg.Type = string(h.Value)
 		case broker.HeaderMessageID:
 			msg.ID = string(h.Value)
+		default:
+			if msg.Headers == nil {
+				msg.Headers = make(map[string]string, len(m.Headers))
+			}
+			msg.Headers[k] = string(h.Value)
 		}
 	}
 	return msg
