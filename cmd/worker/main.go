@@ -7,14 +7,22 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/storage/s3"
 	"go-avatar-service/internal/worker"
 )
+
+// version — версия сборки, задаётся через -ldflags "-X main.version=...".
+var version = "dev"
+
+// telemetryShutdownTimeout — сколько ждать отправки последних спанов при остановке.
+const telemetryShutdownTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -36,6 +44,20 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTelemetry, err := observability.Setup(ctx, cfg.Observability,
+		observability.Service{Name: observability.ServiceWorker, Version: version})
+	if err != nil {
+		return fmt.Errorf("setup telemetry: %w", err)
+	}
+	defer func() {
+		// ctx уже отменён сигналом, а спаны нужно успеть отправить.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetryShutdownTimeout)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			slog.Warn("shutdown telemetry", "err", err)
+		}
+	}()
 
 	pool, err := postgres.OpenPool(ctx, cfg.DatabaseURI)
 	if err != nil {

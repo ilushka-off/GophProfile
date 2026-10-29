@@ -18,6 +18,10 @@ const (
 
 	defaultRateLimitRPS   = 20
 	defaultRateLimitBurst = 40
+
+	defaultOTLPEndpoint      = "jaeger:4317"
+	defaultTracesSampleRatio = 1.0
+	defaultEnvironment       = "local"
 )
 
 // Поддерживаемые брокеры сообщений.
@@ -33,9 +37,10 @@ type Config struct {
 	DatabaseURI   string
 	MaxUploadSize int64
 
-	S3        S3Config
-	Broker    BrokerConfig
-	RateLimit RateLimitConfig
+	S3            S3Config
+	Broker        BrokerConfig
+	RateLimit     RateLimitConfig
+	Observability ObservabilityConfig
 
 	// CORSAllowedOrigins — origins, которым браузер разрешает запросы к API
 	// (scheme://host[:port] или "*"). Пусто — CORS выключен.
@@ -49,6 +54,18 @@ type RateLimitConfig struct {
 	RPS float64
 	// Burst — ёмкость «ведра»: сколько запросов можно сделать подряд.
 	Burst int
+}
+
+// ObservabilityConfig — трейсы и метаданные сервиса в телеметрии.
+type ObservabilityConfig struct {
+	// OTLPEndpoint — куда слать трейсы по OTLP gRPC: host:port или URL.
+	// Пусто — трейсы создаются (trace_id в логах и ответах есть), но никуда не уходят.
+	OTLPEndpoint string
+	// TracesSampleRatio — доля новых трейсов, которые записываются, от 0 до 1.
+	// Решение вызывающего сервиса (родительский спан) важнее.
+	TracesSampleRatio float64
+	// Environment — deployment.environment в resource: local, staging, production.
+	Environment string
 }
 
 // S3Config — параметры запуска S3.
@@ -118,6 +135,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	observability, err := loadObservability()
+	if err != nil {
+		return Config{}, err
+	}
+
 	// Пустой Addr net/http трактует как ":http" (порт 80) — это почти наверняка
 	// ошибка в окружении, а не намерение.
 	httpAddr := getEnv("HTTP_ADDR", defaultHTTPAddr)
@@ -133,6 +155,7 @@ func Load() (Config, error) {
 		S3:                 s3,
 		Broker:             broker,
 		RateLimit:          rateLimit,
+		Observability:      observability,
 		CORSAllowedOrigins: origins,
 	}, nil
 }
@@ -158,6 +181,25 @@ func loadCORSOrigins() ([]string, error) {
 		origins = append(origins, o)
 	}
 	return origins, nil
+}
+
+// loadObservability читает переменные OpenTelemetry. Имена совпадают со
+// стандартными OTEL_*, чтобы их можно было задавать так же, как для любого
+// другого сервиса с OTel SDK.
+func loadObservability() (ObservabilityConfig, error) {
+	cfg := ObservabilityConfig{
+		OTLPEndpoint:      getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTLPEndpoint),
+		TracesSampleRatio: defaultTracesSampleRatio,
+		Environment:       getEnv("DEPLOYMENT_ENVIRONMENT", defaultEnvironment),
+	}
+	if v := getEnv("OTEL_TRACES_SAMPLER_ARG", ""); v != "" {
+		ratio, err := strconv.ParseFloat(v, 64)
+		if err != nil || ratio < 0 || ratio > 1 {
+			return ObservabilityConfig{}, fmt.Errorf("OTEL_TRACES_SAMPLER_ARG: want a number from 0 to 1, got %q", v)
+		}
+		cfg.TracesSampleRatio = ratio
+	}
+	return cfg, nil
 }
 
 func loadRateLimit() (RateLimitConfig, error) {

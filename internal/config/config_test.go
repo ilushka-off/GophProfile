@@ -23,6 +23,7 @@ func setBaseEnv(t *testing.T) {
 	for _, k := range []string{
 		"HTTP_ADDR", "LOG_LEVEL", "MAX_UPLOAD_SIZE", "S3_REGION", "S3_USE_SSL",
 		"BROKER", "KAFKA_BROKERS", "RATE_LIMIT_RPS", "RATE_LIMIT_BURST", "CORS_ALLOWED_ORIGINS",
+		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG", "DEPLOYMENT_ENVIRONMENT",
 	} {
 		unsetEnv(t, k)
 	}
@@ -73,6 +74,11 @@ func TestLoadDefaults(t *testing.T) {
 		},
 		Broker:    BrokerConfig{Kind: BrokerRabbitMQ, RabbitMQURL: "amqp://u:p@localhost:5672/"},
 		RateLimit: RateLimitConfig{RPS: defaultRateLimitRPS, Burst: defaultRateLimitBurst},
+		Observability: ObservabilityConfig{
+			OTLPEndpoint:      defaultOTLPEndpoint,
+			TracesSampleRatio: defaultTracesSampleRatio,
+			Environment:       defaultEnvironment,
+		},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
@@ -90,6 +96,9 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("RATE_LIMIT_RPS", "0.5")
 	t.Setenv("RATE_LIMIT_BURST", "3")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example, http://localhost:3000,")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
+	t.Setenv("DEPLOYMENT_ENVIRONMENT", "staging")
 
 	cfg, err := Load()
 	if err != nil {
@@ -117,6 +126,9 @@ func TestLoadOverrides(t *testing.T) {
 	if want := []string{"https://app.example", "http://localhost:3000"}; !reflect.DeepEqual(cfg.CORSAllowedOrigins, want) {
 		t.Errorf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
 	}
+	if want := (ObservabilityConfig{TracesSampleRatio: 0.25, Environment: "staging"}); cfg.Observability != want {
+		t.Errorf("Observability = %+v, want %+v", cfg.Observability, want)
+	}
 }
 
 func TestLoadErrors(t *testing.T) {
@@ -140,6 +152,8 @@ func TestLoadErrors(t *testing.T) {
 		{name: "zero burst", env: map[string]string{"RATE_LIMIT_BURST": "0"}},
 		{name: "origin with path", env: map[string]string{"CORS_ALLOWED_ORIGINS": "https://app.example/"}},
 		{name: "origin without scheme", env: map[string]string{"CORS_ALLOWED_ORIGINS": "app.example"}},
+		{name: "bad sampler arg", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "all"}},
+		{name: "sampler arg above one", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "1.5"}},
 	}
 
 	for _, tt := range tests {

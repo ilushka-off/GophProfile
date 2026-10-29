@@ -91,6 +91,9 @@ server и worker читают одни и те же переменные.
 | `RATE_LIMIT_RPS` | `20` | Запросов в секунду с одного IP к `/api/v1` и `/web`; `0` — без ограничения. Сверх лимита — 429 с `Retry-After` |
 | `RATE_LIMIT_BURST` | `40` | Сколько запросов подряд можно сделать сверх средней скорости |
 | `CORS_ALLOWED_ORIGINS` | пусто | Origins через запятую (`https://app.example`) или `*`, которым браузер разрешает запросы к API. Пусто — CORS выключен |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `jaeger:4317` | Куда отправлять трейсы по OTLP gRPC (`host:port` или `http://host:port`). Пусто — трейсы не отправляются |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Доля записываемых трейсов от 0 до 1; продолжение входящего трейса решает родитель |
+| `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment.name` в трейсах |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
 `APP_PORT` из `.env.example` настраивают контейнеры docker compose.

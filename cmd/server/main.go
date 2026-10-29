@@ -13,6 +13,7 @@ import (
 
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/services"
@@ -33,6 +34,12 @@ const (
 // чтобы недоступный S3 не подвешивал запуск.
 const storageInitTimeout = 10 * time.Second
 
+// version — версия сборки, задаётся через -ldflags "-X main.version=...".
+var version = "dev"
+
+// telemetryShutdownTimeout — сколько ждать отправки последних спанов при остановке.
+const telemetryShutdownTimeout = 5 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("server stopped", "err", err)
@@ -51,6 +58,20 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTelemetry, err := observability.Setup(ctx, cfg.Observability,
+		observability.Service{Name: observability.ServiceServer, Version: version})
+	if err != nil {
+		return fmt.Errorf("setup telemetry: %w", err)
+	}
+	defer func() {
+		// ctx уже отменён сигналом, а спаны нужно успеть отправить.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetryShutdownTimeout)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			slog.Warn("shutdown telemetry", "err", err)
+		}
+	}()
 
 	if err := postgres.RunMigrations(cfg.DatabaseURI); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
