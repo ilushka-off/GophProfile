@@ -231,6 +231,8 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 - **RED** — rate, errors, duration (p50/p95/p99) по маршрутам, переменная `$service`.
 - **Resource utilization** — CPU и память контейнеров, горутины, heap, паузы GC,
   пул pgx, очереди RabbitMQ и DLQ или consumer lag Kafka.
+- **Business KPIs** — загрузки в минуту, доля отказов, удаления, объём
+  хранилища и топ-10 пользователей, время создания миниатюр и processing lag.
 
 ### Логи
 
