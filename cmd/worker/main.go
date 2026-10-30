@@ -117,9 +117,7 @@ func run() error {
 		}
 		return nil
 	})
-	if err := g.Wait(); err != nil {
-		return err
-	}
+	err = g.Wait()
 	slog.Info("shutting down worker")
-	return nil
+	return err
 }

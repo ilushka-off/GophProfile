@@ -224,7 +224,7 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 | `http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight` | RED по `method`, `route` (шаблон маршрута), `status` |
 | `avatars_uploads_total{status}` | Загрузки: `success`, `rejected` (файл не прошёл проверки), `error` (сбой) |
 | `avatars_upload_duration_seconds`, `avatars_deletes_total` | Длительность успешной загрузки, удаления |
-| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_total` | Объём оригиналов неудалённых аватарок (считается в БД при опросе). См. оговорку ниже |
+| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_all` | Объём оригиналов неудалённых аватарок (считается в БД при опросе). См. оговорку ниже |
 | `avatars_processing_total{type,status}`, `avatars_processing_duration_seconds` | События worker'а: успех или DLQ, время обработки с повторами |
 | `avatars_processing_lag_seconds` | Сколько событие ждало в брокере до начала обработки |
 | `pgxpool_*` | Пул соединений PostgreSQL: занятые, свободные, ожидание |
@@ -234,7 +234,7 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 серий растёт без ограничения. Для учебного проекта это допустимо, но в реальной
 системе так делать нельзя: Prometheus не рассчитан на миллионы серий одной
 метрики, а каждый опрос делает `GROUP BY user_id` по всей таблице. Там стоит
-оставить только `avatars_storage_bytes_total` или отдавать топ-N пользователей,
+оставить только `avatars_storage_bytes_all` или отдавать топ-N пользователей,
 а объём по пользователю брать из БД.
 
 Дашборды Grafana лежат в `deploy/observability/grafana/dashboards` и

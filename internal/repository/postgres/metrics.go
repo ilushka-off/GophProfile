@@ -18,7 +18,7 @@ const storageQueryTimeout = 2 * time.Second
 // у всех экземпляров server.
 //
 //   - avatars_storage_bytes{user_id} — объём по пользователю (из ТЗ);
-//   - avatars_storage_bytes_total — общий объём, чтобы дашборду не нужно было
+//   - avatars_storage_bytes_all — общий объём, чтобы дашборду не нужно было
 //     суммировать серии всех пользователей.
 //
 // Если база недоступна, серии на этом опросе пропускаются, а не роняют весь
@@ -39,7 +39,7 @@ func NewStorageCollector(pool *pgxpool.Pool, logger *slog.Logger) *StorageCollec
 		perUser: prometheus.NewDesc("avatars_storage_bytes",
 			"Size of original files of a user's avatars that are not deleted, in bytes.",
 			[]string{"user_id"}, nil),
-		total: prometheus.NewDesc("avatars_storage_bytes_total",
+		total: prometheus.NewDesc("avatars_storage_bytes_all",
 			"Size of original files of all avatars that are not deleted, in bytes.",
 			nil, nil),
 	}

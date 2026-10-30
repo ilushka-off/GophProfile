@@ -23,9 +23,9 @@ func (s *RepositorySuite) TestStorageCollector() {
 # TYPE avatars_storage_bytes gauge
 avatars_storage_bytes{user_id="alice"} 2.048e+06
 avatars_storage_bytes{user_id="bob"} 1.024e+06
-# HELP avatars_storage_bytes_total Size of original files of all avatars that are not deleted, in bytes.
-# TYPE avatars_storage_bytes_total gauge
-avatars_storage_bytes_total 3.072e+06
+# HELP avatars_storage_bytes_all Size of original files of all avatars that are not deleted, in bytes.
+# TYPE avatars_storage_bytes_all gauge
+avatars_storage_bytes_all 3.072e+06
 `
 	s.NoError(testutil.CollectAndCompare(c, strings.NewReader(want)))
 }

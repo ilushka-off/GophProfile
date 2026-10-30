@@ -258,7 +258,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "max(avatars_storage_bytes_total)",
+          "expr": "max(avatars_storage_bytes_all)",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -543,7 +543,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "max(avatars_storage_bytes_total)",
+          "expr": "max(avatars_storage_bytes_all)",
           "legendFormat": "всего",
           "range": true,
           "instant": false,
