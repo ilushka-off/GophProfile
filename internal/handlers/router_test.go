@@ -5,6 +5,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"go-avatar-service/internal/middleware"
 )
 
 // Логика /health проверяется в health_test.go, здесь — только что маршруты подключены.
@@ -134,5 +139,48 @@ func TestRouterCORSPreflight(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-User-ID") {
 		t.Errorf("Allow-Headers = %q, want X-User-ID", got)
+	}
+}
+
+// Запросы API считаются, /health — нет, а /metrics на публичном адресе нет:
+// в метриках есть user_id.
+func TestRouterMetrics(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	router := NewRouter(discardLogger(), RouterOptions{HTTPMetrics: middleware.NewHTTPMetrics(reg)},
+		healthyHandler(),
+		NewAvatarHandler(&fakeAvatarService{}, testMaxUploadSize, discardLogger()),
+		newTestWebHandler(&fakeAvatarService{}),
+	)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	get("/api/v1/users/u/avatars")
+	get("/api/v1/nope/1")
+	get("/nope/2")
+	get("/health")
+	if rec := get("/metrics"); rec.Code != http.StatusNotFound {
+		t.Errorf("/metrics status = %d, want %d on the public router", rec.Code, http.StatusNotFound)
+	}
+
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `http_requests_total{method="GET",route="/api/v1/users/{user_id}/avatars",status="200"} 1`) {
+		t.Errorf("API request is not counted:\n%s", body)
+	}
+	// Неизвестный путь даёт одно значение route на подроутер, а не путь.
+	for _, route := range []string{`route="/api/v1/*"`, `route="unmatched"`} {
+		if !strings.Contains(body, route) {
+			t.Errorf("no %s series:\n%s", route, body)
+		}
+	}
+	if strings.Contains(body, "nope") {
+		t.Errorf("request path leaked into labels:\n%s", body)
+	}
+	if strings.Contains(body, `route="/health"`) {
+		t.Errorf("/health is counted:\n%s", body)
 	}
 }

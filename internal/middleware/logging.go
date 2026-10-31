@@ -25,15 +25,10 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 				status = http.StatusOK
 			}
 
-			var route string
-			if rctx := chi.RouteContext(r.Context()); rctx != nil {
-				route = rctx.RoutePattern()
-			}
-
 			log.InfoContext(r.Context(), "http request",
 				"request_id", chimw.GetReqID(r.Context()),
 				"method", r.Method,
-				"route", route,
+				"route", routePattern(r),
 				"path", r.URL.Path,
 				"status", status,
 				"bytes", ww.BytesWritten(),
@@ -41,4 +36,14 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 			)
 		})
 	}
+}
+
+// routePattern возвращает шаблон маршрута chi, например /api/v1/avatars/{avatar_id}.
+// Пусто, если запрос не попал ни в маршрут, ни в подроутер или ещё не прошёл
+// роутинг; для неизвестного пути внутри подроутера — его шаблон, /api/v1/*.
+func routePattern(r *http.Request) string {
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		return rctx.RoutePattern()
+	}
+	return ""
 }

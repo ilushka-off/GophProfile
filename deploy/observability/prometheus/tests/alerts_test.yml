@@ -1,0 +1,146 @@
+# promtool test rules deploy/observability/prometheus/tests/alerts_test.yml
+rule_files:
+  - ../rules/alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 10% ответов — 5xx: алерт ждёт 5 минут и срабатывает.
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="avatar-service",method="GET",route="/api/v1/avatars/{avatar_id}",status="500"}'
+        values: "0+10x20"
+      - series: 'http_requests_total{job="avatar-service",method="GET",route="/api/v1/avatars/{avatar_id}",status="200"}'
+        values: "0+90x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: avatar-service
+            exp_annotations:
+              summary: "avatar-service: больше 5% ответов 5xx"
+              description: "Доля ответов 5xx выше 5% последние 5 минут. Дашборд RED покажет маршрут, Loki — ошибки."
+
+  # 1% ошибок на загруженном маршруте и 100% на редком: в сумме меньше 5%,
+  # алерта нет (среднее долей по маршрутам дало бы ложную тревогу).
+  - interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="avatar-service",route="/a",status="500"}'
+        values: "0+1x20"
+      - series: 'http_requests_total{job="avatar-service",route="/a",status="200"}'
+        values: "0+99x20"
+      - series: 'http_requests_total{job="avatar-service",route="/b",status="500"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HighErrorRate
+        exp_alerts: []
+
+  # Все запросы дольше секунды (попадают в бакет 2.5): p95 > 1 с.
+  - interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="0.5"}'
+        values: "0+0x20"
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="1"}'
+        values: "0+0x20"
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="2.5"}'
+        values: "0+10x20"
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="+Inf"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HighResponseTime
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HighResponseTime
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: avatar-service
+            exp_annotations:
+              summary: "avatar-service: p95 ответа больше 1 с"
+              description: "95-й перцентиль длительности HTTP-запросов выше секунды последние 5 минут."
+
+  # Быстрые ответы — алерта нет.
+  - interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="0.1"}'
+        values: "0+10x20"
+      - series: 'http_request_duration_seconds_bucket{job="avatar-service",route="/a",le="+Inf"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HighResponseTime
+        exp_alerts: []
+
+  # RabbitMQ: сообщение в avatars.dlq.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_queue_messages{queue="avatars.dlq",vhost="/"}'
+        values: "0 0 1 1 1 1 1"
+      - series: 'rabbitmq_queue_messages{queue="avatars.process",vhost="/"}'
+        values: "5 5 5 5 5 5 5"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DLQNotEmpty
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: DLQNotEmpty
+        exp_alerts: &dlq_alert
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "В DLQ есть необработанные события"
+              description: "worker отправил события в DLQ (avatars.dlq или avatar-events.dlq). Причина — в заголовке x-error и в логах worker'а."
+
+  # Kafka: offset в avatar-events.dlq вырос.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_topic_partition_current_offset{topic="avatar-events.dlq",partition="0"}'
+        values: "0 0 2 2 2 2 2"
+      - series: 'kafka_topic_partition_oldest_offset{topic="avatar-events.dlq",partition="0"}'
+        values: "0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DLQNotEmpty
+        exp_alerts: *dlq_alert
+
+  # server перестал отвечать на /metrics.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="avatar-service",instance="avatar-service"}'
+        values: "1 1 0 0 0 0 0"
+      - series: 'up{job="avatar-worker",instance="avatar-worker"}'
+        values: "1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: avatar-service
+              instance: avatar-service
+            exp_annotations:
+              summary: "avatar-service недоступен"
+              description: "Prometheus не может опросить avatar-service больше минуты."
+
+  # worker не запущен вовсе: серии up нет.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="avatar-service",instance="avatar-service"}'
+        values: "1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: avatar-worker
+            exp_annotations:
+              summary: "avatar-worker недоступен"
+              description: "Prometheus не может опросить avatar-worker больше минуты."

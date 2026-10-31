@@ -1,0 +1,64 @@
+// Логи всех контейнеров проекта gophprofile из docker socket — в Loki.
+//
+// Лейблы только service, level и container: у них мало значений. trace_id,
+// avatar_id, user_id остаются в теле строки (JSON) — в лейблах каждое новое
+// значение создавало бы новый поток в Loki. Искать по ним: | json | trace_id="...".
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=gophprofile"]
+  }
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  // Имя контейнера приходит с ведущим слешем: /gophprofile-postgres.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Для чужих сервисов (postgres, rabbitmq) service — имя сервиса в compose.
+  // У server и worker его заменит поле service из JSON: avatar-service, avatar-worker.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.json.receiver]
+}
+
+// JSON-логи server и worker: уровень и сервис — в лейблы. Строки не в JSON
+// (логи postgres, kafka) проходят как есть, без level.
+loki.process "json" {
+  stage.json {
+    expressions = {
+      level   = "level",
+      service = "service",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level   = "",
+      service = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

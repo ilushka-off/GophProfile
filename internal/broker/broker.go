@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Message — сообщение брокера независимо от реализации.
@@ -14,6 +15,16 @@ type Message struct {
 	Type string // avatar.uploaded | avatar.process | avatar.deleted
 	Key  string // avatar_id
 	Body []byte // JSON события
+
+	// Headers — дополнительные заголовки сообщения, например traceparent
+	// для сквозного трейса. Едут в AMQP headers или Kafka record headers.
+	Headers map[string]string
+	// Destination — очередь (RabbitMQ) или топик (Kafka), из которого
+	// сообщение прочитано. Заполняет Consumer.
+	Destination string
+	// PublishedAt — когда сообщение опубликовано, по часам publisher'а.
+	// Заполняет Consumer; нулевое, если брокер время не передал.
+	PublishedAt time.Time
 }
 
 // Publisher публикует сообщения в брокер.

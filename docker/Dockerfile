@@ -24,6 +24,8 @@ USER app
 
 FROM runtime AS worker
 COPY --from=builder /out/worker .
+# /metrics для Prometheus (METRICS_ADDR).
+EXPOSE 9091
 ENTRYPOINT ["./worker"]
 
 FROM runtime AS server

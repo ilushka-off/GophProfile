@@ -68,7 +68,7 @@ func (c *Consumer) consumeQueue(ctx context.Context, queue string, deliveries <-
 				}
 				return nil
 			}
-			if err := c.handle(ctx, d, h); err != nil {
+			if err := c.handle(ctx, queue, d, h); err != nil {
 				return err
 			}
 		}
@@ -78,8 +78,8 @@ func (c *Consumer) consumeQueue(ctx context.Context, queue string, deliveries <-
 // handle вызывает обработчик и подтверждает сообщение. Ошибка обработчика —
 // сообщение уходит в avatars.dlq и подтверждается. Ошибка — только если не
 // удалось подтвердить или отправить в DLQ.
-func (c *Consumer) handle(ctx context.Context, d amqp.Delivery, h broker.Handler) error {
-	msg := fromDelivery(d)
+func (c *Consumer) handle(ctx context.Context, queue string, d amqp.Delivery, h broker.Handler) error {
+	msg := fromDelivery(queue, d)
 
 	err := h(ctx, msg)
 	if err != nil && ctx.Err() != nil {

@@ -1,0 +1,13 @@
+# Дашборды как код: JSON из deploy/observability/grafana/dashboards.
+# Правки в UI не сохраняются — меняйте файлы.
+apiVersion: 1
+
+providers:
+  - name: gophprofile
+    folder: GophProfile
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

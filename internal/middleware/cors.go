@@ -12,7 +12,7 @@ import (
 var (
 	corsMethods       = []string{http.MethodGet, http.MethodPost, http.MethodDelete}
 	corsHeaders       = []string{"Content-Type", "X-User-ID", "If-None-Match"}
-	corsExposeHeaders = []string{"ETag", "Retry-After"}
+	corsExposeHeaders = []string{"ETag", "Retry-After", HeaderTraceID}
 )
 
 // corsMaxAge — сколько браузер кеширует ответ на preflight.

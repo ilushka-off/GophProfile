@@ -11,6 +11,10 @@ import (
 	"go-avatar-service/internal/middleware"
 )
 
+// pathHealth — служебный путь вне API: его не трейсят и не считают в метриках
+// запросов. /metrics здесь нет: он на отдельном адресе (METRICS_ADDR).
+const pathHealth = "/health"
+
 // RouterOptions — настройки защитных middleware.
 type RouterOptions struct {
 	// RateLimitRPS и RateLimitBurst — лимит запросов с одного IP к /api/v1
@@ -19,6 +23,8 @@ type RouterOptions struct {
 	RateLimitBurst int
 	// CORSAllowedOrigins — origins, которым браузер разрешает запросы. Пусто — CORS выключен.
 	CORSAllowedOrigins []string
+	// HTTPMetrics считает RED-метрики запросов. nil — не считать.
+	HTTPMetrics *middleware.HTTPMetrics
 }
 
 // NewRouter собирает HTTP-роутер: общие middleware, служебные маршруты
@@ -26,6 +32,11 @@ type RouterOptions struct {
 func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHandler, avatarHandler *AvatarHandler, webHandler *WebHandler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
+	// Трейсинг первым: спан из контекста нужен логам (trace_id) и всем ниже.
+	r.Use(middleware.Tracing(pathHealth))
+	if opts.HTTPMetrics != nil {
+		r.Use(opts.HTTPMetrics.Middleware(pathHealth))
+	}
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.Recoverer(logger))
@@ -40,7 +51,7 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 	})
 
 	// /health не ограничивается: его дёргает healthcheck docker compose.
-	r.Get("/health", healthHandler.Check)
+	r.Get(pathHealth, healthHandler.Check)
 
 	// Один лимитер на API и веб: у клиента одно ведро на весь сервис.
 	rateLimit := middleware.RateLimit(opts.RateLimitRPS, opts.RateLimitBurst, func(w http.ResponseWriter, _ *http.Request) {

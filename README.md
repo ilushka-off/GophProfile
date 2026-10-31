@@ -91,9 +91,14 @@ server и worker читают одни и те же переменные.
 | `RATE_LIMIT_RPS` | `20` | Запросов в секунду с одного IP к `/api/v1` и `/web`; `0` — без ограничения. Сверх лимита — 429 с `Retry-After` |
 | `RATE_LIMIT_BURST` | `40` | Сколько запросов подряд можно сделать сверх средней скорости |
 | `CORS_ALLOWED_ORIGINS` | пусто | Origins через запятую (`https://app.example`) или `*`, которым браузер разрешает запросы к API. Пусто — CORS выключен |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `jaeger:4317` | Куда отправлять трейсы по OTLP gRPC (`host:port` или `http://host:port`). Пусто — трейсы не отправляются |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Доля записываемых трейсов от 0 до 1; продолжение входящего трейса решает родитель |
+| `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment.name` в трейсах |
+| `METRICS_ADDR` | `:9091` | Адрес отдельного HTTP-сервера с `/metrics`. У server он должен отличаться от `HTTP_ADDR` и не быть доступен клиентам: в метриках есть `user_id`. `make run-worker` поднимает метрики worker'а на `:9092` (`WORKER_METRICS_ADDR`) |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
-`APP_PORT` из `.env.example` настраивают контейнеры docker compose.
+`APP_PORT` из `.env.example` настраивают контейнеры docker compose, а `OTLP_ENDPOINT` —
+`OTEL_EXPORTER_OTLP_ENDPOINT` server'а и worker'а в compose (по умолчанию пусто).
 
 ## API
 
@@ -150,6 +155,149 @@ curl -s http://localhost:8080/health
 | POST | `/web/upload` | Та же загрузка из обычной HTML-формы (без JS), затем редирект на галерею |
 | GET | `/web/gallery/{user_id}` | Миниатюры 300x300 с размером, форматом, статусом и кнопкой удаления |
 
+## Наблюдаемость
+
+Профиль `observability` поднимает рядом с сервисом Prometheus, Alertmanager,
+Jaeger, Loki, Alloy, Grafana и cAdvisor (порты — в `.env.example`):
+
+```bash
+make up-observability                     # BROKER=kafka — с Kafka
+# то же вручную; без OTLP_ENDPOINT трейсы в Jaeger не попадут
+OTLP_ENDPOINT=jaeger:4317 docker compose --profile observability --profile rabbitmq up --build
+```
+
+| Адрес | Что там |
+| --- | --- |
+| http://localhost:3000/ | Grafana: дашборды в папке GophProfile (без входа; админ — `GRAFANA_ADMIN_*`) |
+| http://localhost:16686/ | Jaeger UI: трейсы и граф зависимостей (System Architecture) |
+| http://localhost:9090/targets | Prometheus: все цели должны быть UP |
+| http://localhost:9093/ | Alertmanager |
+Метрики server и worker отдаются на `:9091` только внутри сети compose: порт
+не публикуется, потому что `avatars_storage_bytes` раскрывает `user_id` всех
+пользователей. Посмотреть их можно в Prometheus или командой
+`docker compose exec server-rabbitmq wget -qO- http://127.0.0.1:9091/metrics`.
+
+Без профиля сервис работает как раньше: `OTLP_ENDPOINT` пуст, трейсы создаются
+(`trace_id` есть в логах и в `X-Trace-ID`), но никуда не отправляются.
+
+### Трейсы
+
+server и worker пишут трейсы OpenTelemetry и отправляют их в Jaeger по OTLP
+gRPC (`OTEL_EXPORTER_OTLP_ENDPOINT`). Загрузка аватарки видна одним трейсом от
+HTTP-запроса до готовых миниатюр:
+
+```
+POST /api/v1/avatars                         avatar-service
+└─ upload_avatar                             user.id, avatar.id, file.size, mime.type
+   ├─ s3.PutObject                           s3.bucket, s3.key, file.size
+   ├─ INSERT                                 db.system.name=postgresql (текст запроса без параметров)
+   └─ publish avatars.exchange               kind=producer, traceparent → заголовки сообщения
+      └─ process avatars.process             avatar-worker, kind=consumer
+         ├─ SELECT (дедупликация, статус)
+         └─ process_thumbnails               thumbnail.sizes
+            ├─ s3.GetObject
+            ├─ s3.PutObject × 2
+            └─ UPDATE
+```
+
+Контекст трейса едет в заголовках сообщения (AMQP headers в RabbitMQ, record
+headers в Kafka), поэтому трейс сквозной для обоих брокеров. Имя HTTP-спана —
+шаблон маршрута (`GET /api/v1/avatars/{avatar_id}`), ответы 5xx помечают спан
+ошибкой, `/health` и `/metrics` не трейсятся. Каждый ответ API несёт заголовок
+`X-Trace-ID`: по нему трейс находится в Jaeger, а логи запроса — в Loki.
+
+Как проверить: загрузить файл, взять `X-Trace-ID` из ответа и открыть
+`http://localhost:16686/trace/<trace_id>`.
+
+```bash
+curl -si -H 'X-User-ID: user-42' -F file=@me.png http://localhost:8080/api/v1/avatars | grep -i x-trace-id
+```
+
+### Метрики и дашборды
+
+Prometheus опрашивает раз в 15 секунд server, worker, брокер (плагин
+`rabbitmq_prometheus` или kafka-exporter), cAdvisor и SeaweedFS и хранит
+данные 7 дней. Метрики сервиса:
+
+| Метрика | Что считает |
+| --- | --- |
+| `http_requests_total`, `http_request_duration_seconds`, `http_requests_in_flight` | RED по `method`, `route` (шаблон маршрута), `status` |
+| `avatars_uploads_total{status}` | Загрузки: `success`, `rejected` (файл не прошёл проверки), `error` (сбой) |
+| `avatars_upload_duration_seconds`, `avatars_deletes_total` | Длительность успешной загрузки, удаления |
+| `avatars_storage_bytes{user_id}`, `avatars_storage_bytes_all` | Объём оригиналов неудалённых аватарок (считается в БД при опросе). См. оговорку ниже |
+| `avatars_processing_total{type,status}`, `avatars_processing_duration_seconds` | События worker'а: успех или DLQ, время обработки с повторами |
+| `avatars_processing_lag_seconds` | Сколько событие ждало в брокере до начала обработки |
+| `pgxpool_*` | Пул соединений PostgreSQL: занятые, свободные, ожидание |
+| `go_*`, `process_*` | Go runtime и процесс |
+
+`avatars_storage_bytes{user_id}` — одна серия на каждого пользователя, число
+серий растёт без ограничения. Для учебного проекта это допустимо, но в реальной
+системе так делать нельзя: Prometheus не рассчитан на миллионы серий одной
+метрики, а каждый опрос делает `GROUP BY user_id` по всей таблице. Там стоит
+оставить только `avatars_storage_bytes_all` или отдавать топ-N пользователей,
+а объём по пользователю брать из БД.
+
+Дашборды Grafana лежат в `deploy/observability/grafana/dashboards` и
+подключаются при старте (правки в UI не сохраняются):
+
+- **Service overview** — доступность server и worker, RPS, доля 5xx, p95,
+  последние ошибки из Loki;
+- **RED** — rate, errors, duration (p50/p95/p99) по маршрутам, переменная `$service`.
+- **Resource utilization** — CPU и память контейнеров, горутины, heap, паузы GC,
+  пул pgx, очереди RabbitMQ и DLQ или consumer lag Kafka.
+- **Business KPIs** — загрузки в минуту, доля отказов, удаления, объём
+  хранилища и топ-10 пользователей, время создания миниатюр и processing lag.
+
+### Алерты
+
+Правила Prometheus — в `deploy/observability/prometheus/rules/alerts.yml`,
+сработавшие алерты уходят в Alertmanager (http://localhost:9093) и видны
+в Grafana → Alerting.
+
+| Алерт | Условие |
+| --- | --- |
+| `HighErrorRate` | Больше 5% ответов 5xx за 5 минут (по сумме `rate()` всех маршрутов) |
+| `HighResponseTime` | p95 длительности ответа больше 1 с за 5 минут |
+| `DLQNotEmpty` | В `avatars.dlq` или `avatar-events.dlq` есть сообщения |
+| `ServiceDown` | server или worker не отвечает на `/metrics` или не запущен |
+| `ErrorLogsSpike` | Больше 10 строк ERROR за 5 минут (Loki ruler, см. «Логи») |
+
+Пример получателя в `deploy/observability/alertmanager/alertmanager.yml` — webhook
+на `http://host.docker.internal:5001/alerts`. Тесты правил — `make alerts-test`
+(promtool в Docker), они же идут в CI.
+
+### Логи
+
+server и worker пишут JSON в stdout: `time`, `level`, `msg`, `service`
+(`avatar-service` или `avatar-worker`), `version` и, если запись сделана внутри
+трейса, `trace_id` и `span_id`. Уровень задаёт `LOG_LEVEL`. Каждый HTTP-запрос
+пишется access-логом с `method`, `route`, `status`, `duration_ms`. Содержимое
+файлов, пароли и строки подключения в лог не попадают.
+
+Alloy собирает логи всех контейнеров проекта и отправляет в Loki с лейблами
+`service`, `level` и `container`; `trace_id` остаётся в теле строки. Примеры
+запросов в Grafana → Explore → Loki:
+
+```logql
+{service="avatar-service"} | json | level="ERROR"
+{service=~"avatar-.+"} | json | trace_id="4bf92f3577b34da6a3ce929d0e0e4736"
+```
+
+В строке лога `trace_id` — ссылка на трейс в Jaeger, а из спана в Jaeger есть
+переход к логам этого трейса (*Logs for this span*).
+
+Алерт `ErrorLogsSpike` (Loki ruler, `deploy/observability/loki/rules/`)
+срабатывает, если у сервиса больше 10 строк уровня ERROR за 5 минут. Проверить:
+остановить базу и сделать несколько запросов — каждый ответ 500 пишет ошибку.
+
+```bash
+docker compose stop postgres
+for i in $(seq 15); do curl -s -o /dev/null http://localhost:8080/api/v1/users/u/avatars; done
+docker compose start postgres
+```
+
+Через 1–2 минуты алерт виден в Grafana → Alerting → Alert rules (источник Loki).
+
 ## Разработка
 
 server и worker без переменных окружения не стартуют (например, `database URI
@@ -165,6 +313,7 @@ make test         # все тесты, включая интеграционны
 make test-short   # только unit-тесты, без контейнеров
 make cover        # покрытие; падает, если ниже 50%
 make lint         # golangci-lint v2 (конфиг .golangci.yml)
+make alerts-test  # promtool: конфиг Prometheus и тесты алертов (нужен Docker)
 ```
 
 Интеграционные тесты поднимают PostgreSQL, SeaweedFS, RabbitMQ и Kafka через
@@ -182,9 +331,11 @@ cmd/server, cmd/worker         точки входа
 internal/config                конфиг из переменных окружения
 internal/domain                модель Avatar, ошибки, ключи S3
 internal/handlers              HTTP-обработчики API и веб-интерфейса, роутер
-internal/middleware, httpx     логирование, recover, формат ответов
+internal/middleware, httpx     логирование, трейсинг, метрики HTTP, recover, формат ответов
+internal/observability         OpenTelemetry, JSON-логи с trace_id, реестр метрик
 internal/services              бизнес-логика аватарок
 internal/repository/postgres   PostgreSQL (pgx) и миграции
+internal/storage               трейсинг операций с файлами
 internal/storage/s3            S3-клиент (minio-go)
 internal/broker                интерфейсы брокера, события, retry
 internal/broker/{rabbitmq,kafka,factory}  реализации и выбор по BROKER
@@ -192,4 +343,5 @@ internal/imaging               кодирование и ресайз карти
 internal/worker                обработка событий worker'ом
 web                            HTML-шаблоны (встроены в бинарник)
 docker/Dockerfile              multi-stage сборка, цели server и worker
+deploy/observability           конфиги Prometheus, Loki, Alloy, Grafana
 ```
