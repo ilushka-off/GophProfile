@@ -31,3 +31,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: make alerts-test ENV_FILE=/dev/null
+
+  # helm lint обоих чартов и kubeconform отрендеренных манифестов (NFR-19):
+  # local и prod values, оба брокера, с CRD Prometheus Operator и без.
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - run: make helm-check ENV_FILE=/dev/null
+
+  # Образы server и worker собираются (distroless, статические бинарники).
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - run: make k8s-images ENV_FILE=/dev/null IMAGE_BUILDER=docker IMAGE_TAG=${GITHUB_SHA::7}

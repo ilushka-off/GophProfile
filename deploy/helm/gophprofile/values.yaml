@@ -1,0 +1,289 @@
+# Значения по умолчанию: безопасные и рассчитанные на внешние зависимости.
+# Окружения переопределяют их в values-local.yaml (Rancher Desktop) и
+# values-prod.yaml. Схема и проверка типов — values.schema.json.
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+# Брокер сообщений: rabbitmq или kafka. Определяет BROKER в ConfigMap,
+# ключ в Secret (RABBITMQ_URL) или KAFKA_BROKERS в ConfigMap и сетевые политики.
+broker:
+  type: rabbitmq
+
+# Несекретные настройки — ConfigMap <fullname>-config, ключи = имена env.
+config:
+  logLevel: info
+  # Лимит загрузки в байтах (MAX_UPLOAD_SIZE). Ingress пропускает тело до
+  # ingress.proxyBodySize — он должен быть не меньше этого значения плюс multipart.
+  maxUploadSize: 10485760
+  # deployment.environment в трейсах.
+  environment: production
+  s3:
+    endpoint: ""
+    bucket: avatars
+    region: us-east-1
+    useSSL: true
+  # Адреса брокеров Kafka через запятую (при broker.type=kafka).
+  kafkaBrokers: ""
+  otel:
+    # OTLP gRPC. Пусто — трейсы не отправляются, trace_id в логах остаётся.
+    endpoint: ""
+    # Доля записываемых трейсов, от 0 до 1.
+    samplerArg: "0.1"
+  # Защита API: лимит запросов с одного IP и CORS (пусто — выключен).
+  rateLimit:
+    rps: 20
+    burst: 40
+  corsAllowedOrigins: ""
+
+# Секреты: DATABASE_URI, S3_ACCESS_KEY, S3_SECRET_KEY, RABBITMQ_URL (при
+# broker.type=rabbitmq). Ключи Secret совпадают с именами env и подключаются
+# через envFrom.
+secret:
+  # Имя заранее созданного Secret (External Secrets, Sealed Secrets, kubectl).
+  # Задан — чарт свой Secret не создаёт. Так работает прод: в git секретов нет.
+  existingSecret: ""
+  # Значения для Secret, который создаёт чарт (только local). Передаются
+  # из values-local.yaml или --set, в репозитории для прода их нет.
+  values: {}
+  #   DATABASE_URI: postgres://user:pass@postgresql:5432/gophprofile?sslmode=disable
+  #   S3_ACCESS_KEY: ...
+  #   S3_SECRET_KEY: ...
+  #   RABBITMQ_URL: amqp://user:pass@rabbitmq:5672/
+
+serviceAccount:
+  # ServiceAccount без токена API: приложение не ходит в Kubernetes API.
+  create: true
+  name: ""
+  annotations: {}
+
+# Общий securityContext подов и контейнеров — проходит Pod Security «restricted».
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Размер emptyDir в /tmp: при readOnlyRootFilesystem временные файлы
+# обработки картинок пишутся туда.
+tmpVolume:
+  sizeLimit: 256Mi
+
+server:
+  image:
+    repository: gophprofile/server
+    # Пусто — Chart.appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Используется, только если autoscaling.enabled=false: иначе поле replicas
+  # не рендерится и число подов задаёт HPA.
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      # GOMEMLIMIT считается как 90% от этого значения (Mi или Gi).
+      memory: 512Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # Пробы: startup и liveness — лёгкий /livez (процесс жив), readiness — /health
+  # (БД, S3, брокер). Если liveness проверяла бы зависимости, падение БД
+  # перезапускало бы все поды по кругу.
+  probes:
+    startup:
+      path: /livez
+      periodSeconds: 2
+      failureThreshold: 30
+    liveness:
+      path: /livez
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /health
+      periodSeconds: 5
+      failureThreshold: 2
+  # SIGTERM → /health 503 → пауза shutdownDelay → Shutdown (до 20 с).
+  terminationGracePeriodSeconds: 30
+  shutdownDelay: 5s
+  service:
+    type: ClusterIP
+    port: 80
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Поды server по разным узлам, если узлов несколько.
+  topologySpreadConstraints: []
+  extraEnv: []
+
+worker:
+  image:
+    repository: gophprofile/worker
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      # Ресайз картинок — CPU-нагрузка.
+      cpu: 1000m
+      memory: 512Mi
+  # Масштабирование по CPU. С Kafka maxReplicas не больше числа партиций
+  # avatar-events: лишние консьюмеры в группе простаивают.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+    # null — без метрики памяти.
+    targetMemoryUtilizationPercentage: null
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # /livez и /health worker'а — на порту метрик 9091.
+  probes:
+    startup:
+      path: /livez
+      periodSeconds: 2
+      failureThreshold: 30
+    liveness:
+      path: /livez
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      path: /health
+      periodSeconds: 10
+      failureThreshold: 3
+  # Текущее сообщение дорабатывается до 45 с после SIGTERM.
+  terminationGracePeriodSeconds: 60
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# Миграции БД: Job-хук pre-install,pre-upgrade запускает `server migrate up`
+# из образа server. Упавшая миграция останавливает helm upgrade.
+migrations:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+ingress:
+  enabled: true
+  # ingress-nginx: ТЗ использует его аннотации.
+  className: nginx
+  host: avatars.example.com
+  # Лимит тела запроса в nginx: 10 MB файла + запас на multipart.
+  proxyBodySize: 11m
+  annotations: {}
+  # TLS: secretName с сертификатом; для cert-manager — clusterIssuer.
+  tls:
+    enabled: false
+    secretName: ""
+    clusterIssuer: ""
+
+# ServiceMonitor, PrometheusRule и дашборды — только если monitoring.enabled
+# и в кластере есть API monitoring.coreos.com/v1 (kube-prometheus-stack).
+monitoring:
+  enabled: true
+  serviceMonitor:
+    interval: 30s
+    scrapeTimeout: 10s
+    # kube-prometheus-stack берёт только ServiceMonitor с лейблом release=<релиз>.
+    labels:
+      release: kps
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kps
+  dashboards:
+    enabled: true
+    # Лейбл, по которому sidecar Grafana подхватывает ConfigMap.
+    labels:
+      grafana_dashboard: "1"
+    # Папка в Grafana (если sidecar настроен с folderAnnotation=grafana_folder).
+    folder: GophProfile
+
+# NetworkPolicy: default deny на ingress и egress в namespace релиза, затем
+# только нужные потоки. Для внешних (управляемых) сервисов вместо podSelector
+# в to указывается ipBlock.
+networkPolicy:
+  enabled: true
+  # Namespace контроллера Ingress и стека мониторинга.
+  ingressControllerNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+  # CoreDNS (в k3s и большинстве дистрибутивов — kube-system, k8s-app=kube-dns).
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+  # Куда приложению можно ходить. port — порт пода назначения.
+  egress:
+    postgresql:
+      port: 5432
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: postgresql
+    s3:
+      port: 8333
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: s3
+    rabbitmq:
+      port: 5672
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: rabbitmq
+    kafka:
+      port: 9092
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kafka
+    # OTLP gRPC в Jaeger.
+    otlp:
+      port: 4317
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+
+# helm test: под с curl проверяет /health через Service.
+tests:
+  image:
+    repository: curlimages/curl
+    tag: "8.17.0"

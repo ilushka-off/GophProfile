@@ -133,3 +133,51 @@ func TestHealthHandlerCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestHealthHandlerWithoutBroker(t *testing.T) {
+	h := NewHealthHandler(fakePinger{}, fakeBucket{exists: true}, nil, "kafka", discardLogger())
+
+	rec := httptest.NewRecorder()
+	h.Check(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	want := `{"status":"ok","broker_type":"kafka","components":{"database":"ok","storage":"ok"}}` + "\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+}
+
+func TestHealthHandlerDrain(t *testing.T) {
+	// После Drain зависимости не опрашиваются: даже зависшая БД не задерживает ответ.
+	h := NewHealthHandler(hangingPinger{}, fakeBucket{exists: true}, fakePinger{}, "rabbitmq", discardLogger())
+	h.Drain()
+
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	h.Check(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if elapsed := time.Since(start); elapsed > healthCheckTimeout/2 {
+		t.Errorf("draining check took %v, want an immediate answer", elapsed)
+	}
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	want := `{"status":"shutting_down","broker_type":"rabbitmq","components":{}}` + "\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+}
+
+func TestLive(t *testing.T) {
+	rec := httptest.NewRecorder()
+	Live(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got, want := rec.Body.String(), `{"status":"ok"}`+"\n"; got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+}

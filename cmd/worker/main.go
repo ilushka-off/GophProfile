@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	"go-avatar-service/internal/broker"
 	"go-avatar-service/internal/broker/factory"
 	"go-avatar-service/internal/config"
+	"go-avatar-service/internal/handlers"
 	"go-avatar-service/internal/observability"
 	"go-avatar-service/internal/repository/postgres"
 	"go-avatar-service/internal/storage"
@@ -28,6 +30,11 @@ var version = "dev"
 // telemetryShutdownTimeout — сколько ждать отправки последних спанов при остановке.
 const telemetryShutdownTimeout = 5 * time.Second
 
+// drainTimeout — сколько после SIGTERM дорабатывается текущее сообщение.
+// Вместе с закрытием соединений и отправкой трейсов укладывается
+// в terminationGracePeriodSeconds: 60 пода worker.
+const drainTimeout = 45 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("worker stopped", "err", err)
@@ -36,7 +43,10 @@ func main() {
 }
 
 // run подключается к БД, S3 и брокеру и обрабатывает события до SIGTERM.
-// Миграции применяет server, поэтому worker стартует после него.
+// Миграции применяет server (или Helm-хук в Kubernetes), поэтому worker
+// стартует после него. По SIGTERM consumer перестаёт брать новые сообщения,
+// а текущее дорабатывается (FinishInFlight); неподтверждённые брокер доставит
+// повторно.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -93,12 +103,19 @@ func run() error {
 	// message_id; если повторы кончились или ошибка постоянная, аватарка
 	// получает статус failed, а consumer отправляет сообщение в DLQ. Метрики
 	// снаружи всего: считают итоговый исход события.
-	handler := worker.NewMetrics(metrics).Instrument(processor.MarkFailed(
+	handler := worker.FinishInFlight(worker.NewMetrics(metrics).Instrument(processor.MarkFailed(
 		broker.WithRetry(
 			worker.Deduplicate(postgres.NewMessageLog(pool), logger, processor.Handle),
 			broker.DefaultRetryDelays, logger,
 		),
-	))
+	)), drainTimeout)
+
+	// Пробы Kubernetes — на том же порту, что и /metrics: /livez (процесс жив)
+	// и /health (БД и S3; потеря брокера и так завершает worker).
+	probes := map[string]http.Handler{
+		handlers.PathLivez:  http.HandlerFunc(handlers.Live),
+		handlers.PathHealth: http.HandlerFunc(handlers.NewHealthHandler(pool, fileStorage, nil, cfg.Broker.Kind, logger).Check),
+	}
 
 	// Сервер метрик живёт, пока идёт обработка: остановка consumer'а
 	// (сигнал или потеря брокера) останавливает и его, и наоборот.
@@ -107,7 +124,7 @@ func run() error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		slog.Info("serving metrics", "addr", cfg.Observability.MetricsAddr)
-		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics)
+		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics, probes)
 	})
 	g.Go(func() error {
 		defer cancel()

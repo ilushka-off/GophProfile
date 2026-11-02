@@ -3,8 +3,10 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Правила алертов общие с Kubernetes: deploy/helm/gophprofile/files/prometheus
+# (в чарте они становятся PrometheusRule), в compose смонтированы сюда.
 rule_files:
-  - /etc/prometheus/rules/*.yml
+  - /etc/prometheus-rules/*.yml
 
 alerting:
   alertmanagers:

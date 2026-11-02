@@ -26,14 +26,21 @@ x-app-env: &app-env
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
   OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
   DEPLOYMENT_ENVIRONMENT: docker
+  # В compose миграции применяет server при старте (NFR-7); в Kubernetes — Helm-хук.
+  MIGRATE_ON_START: "true"
 
 x-server: &server
   build:
     context: .
     dockerfile: docker/Dockerfile
     target: server
+    args:
+      VERSION: ${VERSION:-dev}
   image: gophprofile-server
   restart: unless-stopped
+  # Как terminationGracePeriodSeconds в Kubernetes: пауза SHUTDOWN_DELAY
+  # и доработка активных запросов.
+  stop_grace_period: 30s
   ports:
     - "${APP_PORT:-8080}:8080"
   # Одно имя у server любого профиля: Prometheus находит его по DNS.
@@ -46,8 +53,12 @@ x-worker: &worker
     context: .
     dockerfile: docker/Dockerfile
     target: worker
+    args:
+      VERSION: ${VERSION:-dev}
   image: gophprofile-worker
   restart: unless-stopped
+  # Текущее сообщение дорабатывается до 45 с после SIGTERM.
+  stop_grace_period: 60s
   networks:
     default:
       aliases: [avatar-worker]
@@ -245,6 +256,7 @@ services:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./deploy/observability/prometheus:/etc/prometheus:ro
+      - ./deploy/helm/gophprofile/files/prometheus:/etc/prometheus-rules:ro
       - prometheus-data:/prometheus
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
@@ -310,7 +322,8 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Дашборды общие с Kubernetes: в чарте они становятся ConfigMap для sidecar Grafana.
+      - ./deploy/helm/gophprofile/dashboards:/var/lib/grafana/dashboards:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
       interval: 10s
@@ -321,7 +334,7 @@ services:
       - loki
       - jaeger
 
-  # Алерты Prometheus (deploy/observability/prometheus/rules) и Loki ruler.
+  # Алерты Prometheus (deploy/helm/gophprofile/files/prometheus) и Loki ruler.
   alertmanager:
     image: prom/alertmanager:v0.34.1
     container_name: gophprofile-alertmanager

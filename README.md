@@ -8,8 +8,14 @@
   RabbitMQ **или** Kafka — брокер выбирается конфигом.
 - Веб-интерфейс: форма загрузки с превью, drag&drop и прогрессом, галерея.
 - Всё окружение поднимается одной командой через Docker Compose.
+- Деплой в Kubernetes одним `helm upgrade --install`: автомасштабирование,
+  пробы, мониторинг, сетевые политики и Pod Security `restricted`
+  (см. [Kubernetes и Helm](#kubernetes-и-helm)).
 
 ## Архитектура
+
+Схемы сервиса и его развёртывания в Kubernetes — [docs/architecture.md](docs/architecture.md),
+API — [docs/openapi.yaml](docs/openapi.yaml) (OpenAPI 3.1).
 
 ```
  браузер / клиент ──HTTP──► server ──► PostgreSQL (метаданные)
@@ -22,7 +28,7 @@
 
 | Компонент | Что делает |
 | --- | --- |
-| `cmd/server` | REST API и веб-интерфейс. Применяет миграции при старте, пишет в БД и S3, публикует события |
+| `cmd/server` | REST API и веб-интерфейс. Пишет в БД и S3, публикует события. Миграции применяет при старте (`MIGRATE_ON_START`) или подкомандой `server migrate up` (Helm-хук в Kubernetes) |
 | `cmd/worker` | Читает события: создаёт миниатюры, удаляет файлы удалённых аватарок |
 | PostgreSQL | Таблицы `avatars` и `processed_messages` (идемпотентность worker'а) |
 | SeaweedFS | S3-совместимое хранилище. Образы MinIO больше не публикуются на Docker Hub, поэтому в compose — SeaweedFS; клиент (`minio-go`) работает с любым S3 |
@@ -94,6 +100,8 @@ server и worker читают одни и те же переменные.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `jaeger:4317` | Куда отправлять трейсы по OTLP gRPC (`host:port` или `http://host:port`). Пусто — трейсы не отправляются |
 | `OTEL_TRACES_SAMPLER_ARG` | `1` | Доля записываемых трейсов от 0 до 1; продолжение входящего трейса решает родитель |
 | `DEPLOYMENT_ENVIRONMENT` | `local` | `deployment.environment.name` в трейсах |
+| `MIGRATE_ON_START` | `true` | Применять миграции при старте server. В Kubernetes `false`: их применяет Helm-хук до выката подов |
+| `SHUTDOWN_DELAY` | `5s` | Сколько после SIGTERM server отвечает 503 на `/health`, продолжая обслуживать запросы, прежде чем закрыть HTTP-сервер (Shutdown ждёт активные запросы до 20 с) |
 | `METRICS_ADDR` | `:9091` | Адрес отдельного HTTP-сервера с `/metrics`. У server он должен отличаться от `HTTP_ADDR` и не быть доступен клиентам: в метриках есть `user_id`. `make run-worker` поднимает метрики worker'а на `:9092` (`WORKER_METRICS_ADDR`) |
 
 Переменные `POSTGRES_*`, `S3_PORT`, `RABBITMQ_*`, `KAFKA_EXTERNAL_PORT`,
@@ -115,7 +123,10 @@ server и worker читают одни и те же переменные.
 | GET | `/users/{user_id}/avatars` | Список аватарок пользователя, новые сверху |
 | DELETE | `/avatars/{avatar_id}` | Удалить свою аватарку |
 | DELETE | `/users/{user_id}/avatar` | Удалить свою текущую аватарку |
-| GET | `/health` | Статус компонентов (вне `/api/v1`), 503 если что-то недоступно |
+| GET | `/health` | Готовность: статус компонентов (вне `/api/v1`), 503 если что-то недоступно или сервис останавливается |
+| GET | `/livez` | Живость процесса без проверки зависимостей (вне `/api/v1`) |
+
+Полное описание — [docs/openapi.yaml](docs/openapi.yaml).
 
 Коды ответов: 200/201 при успехе, 204 на DELETE, 304 на совпавший `If-None-Match`,
 400 — ошибка валидации, 403 — чужая аватарка, 404 — нет или удалена, 413 — файл
@@ -237,7 +248,7 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 оставить только `avatars_storage_bytes_all` или отдавать топ-N пользователей,
 а объём по пользователю брать из БД.
 
-Дашборды Grafana лежат в `deploy/observability/grafana/dashboards` и
+Дашборды Grafana лежат в `deploy/helm/gophprofile/dashboards` и
 подключаются при старте (правки в UI не сохраняются):
 
 - **Service overview** — доступность server и worker, RPS, доля 5xx, p95,
@@ -250,7 +261,7 @@ Prometheus опрашивает раз в 15 секунд server, worker, бро
 
 ### Алерты
 
-Правила Prometheus — в `deploy/observability/prometheus/rules/alerts.yml`,
+Правила Prometheus — в `deploy/helm/gophprofile/files/prometheus/alerts.yml`,
 сработавшие алерты уходят в Alertmanager (http://localhost:9093) и видны
 в Grafana → Alerting.
 
@@ -298,6 +309,103 @@ docker compose start postgres
 
 Через 1–2 минуты алерт виден в Grafana → Alerting → Alert rules (источник Loki).
 
+## Kubernetes и Helm
+
+Сервис упакован в два чарта:
+
+| Чарт | Что ставит |
+| --- | --- |
+| `deploy/helm/gophprofile` | server, worker, Job миграций (хук `pre-install,pre-upgrade`), Service, Ingress, HPA, PDB, ConfigMap/Secret, ServiceAccount, NetworkPolicy, ServiceMonitor, PrometheusRule и дашборды |
+| `deploy/helm/gophprofile-infra` | PostgreSQL, S3 (SeaweedFS), RabbitMQ или Kafka — только для локального кластера; в проде — управляемые сервисы |
+
+Подробности ресурсов, порядок хуков и graceful shutdown — в
+[docs/architecture.md](docs/architecture.md).
+
+### Локальный запуск в Rancher Desktop
+
+Нужны Rancher Desktop (Kubernetes 1.30+), `helm`, `kubectl`.
+
+1. В Rancher Desktop включить Kubernetes и **отключить Traefik**
+   (Preferences → Kubernetes): чарт рассчитан на ingress-nginx.
+2. Поднять всё одной командой:
+
+   ```bash
+   make k8s-up                # RabbitMQ
+   make k8s-up BROKER=kafka   # или Kafka
+   ```
+
+   По шагам это `make k8s-ingress` (ingress-nginx), `make k8s-observability`
+   (kube-prometheus-stack, Loki, Alloy, Jaeger в namespace `monitoring`),
+   `make k8s-images` (образы `gophprofile/server` и `gophprofile/worker` с тегом
+   `appVersion` чарта), `make k8s-infra` (namespace `gophprofile` с Pod Security
+   `restricted` и зависимости) и `make k8s-deploy` (приложение).
+   С движком dockerd вместо containerd: `make k8s-up IMAGE_BUILDER=docker`.
+3. Добавить `127.0.0.1 avatars.local` в hosts (`/etc/hosts` или
+   `C:\Windows\System32\drivers\etc\hosts`) и открыть
+   http://avatars.local/web/upload.
+4. Проверить: `make k8s-test` (helm test ходит в `/health` через Service),
+   `kubectl -n gophprofile get pods,hpa`.
+
+| Что | Как открыть |
+| --- | --- |
+| Grafana (admin/admin) | `kubectl -n monitoring port-forward svc/kps-grafana 3000:80` → http://localhost:3000 |
+| Prometheus | `kubectl -n monitoring port-forward svc/kps-kube-prometheus-stack-prometheus 9090` |
+| Jaeger | `kubectl -n monitoring port-forward svc/jaeger-query 16686` |
+| RabbitMQ UI | `kubectl -n gophprofile port-forward svc/rabbitmq 15672` |
+
+Удалить приложение и зависимости — `make k8s-down` (стек мониторинга и
+ingress-nginx остаются).
+
+### Деплой в другой кластер
+
+```bash
+kubectl apply -f deploy/k8s/namespace.yaml
+# Secret с ключами DATABASE_URI, S3_ACCESS_KEY, S3_SECRET_KEY (и RABBITMQ_URL)
+# создаётся заранее — в git секретов нет.
+helm upgrade --install gophprofile deploy/helm/gophprofile -n gophprofile \
+  -f deploy/helm/gophprofile/values-prod.yaml --set server.image.tag=<версия> --set worker.image.tag=<версия>
+```
+
+`values-prod.yaml` — пример: внешние PostgreSQL, S3 и Kafka, TLS через
+cert-manager, HPA server 2…10 и worker 1…6, сэмплинг трейсов 10%,
+NetworkPolicy к зависимостям по CIDR. Все параметры и их проверка —
+`values.yaml` и `values.schema.json` (например, тег `latest` запрещён: с ним
+`helm upgrade` не перезапускает поды).
+
+### Как это устроено
+
+- **Пробы.** startup и liveness — `/livez` (процесс жив), readiness — `/health`
+  (БД, S3, брокер). Если бы liveness проверяла зависимости, падение БД
+  перезапускало бы все поды по кругу. У worker'а те же эндпоинты на порту 9091.
+- **Миграции** применяет Job-хук `server migrate up` до выката подов
+  (`MIGRATE_ON_START=false`). Упавшая миграция останавливает `helm upgrade`,
+  старая версия продолжает работать.
+- **Масштабирование.** HPA `autoscaling/v2` по CPU 70% и памяти 80% от
+  requests; при включённом HPA поле `replicas` не рендерится. С Kafka
+  `maxReplicas` worker'а не больше числа партиций `avatar-events`.
+  Проверка: нагрузка на `POST /api/v1/avatars` (`hey`, `k6`) и `kubectl get hpa -w`.
+- **Graceful shutdown.** server по SIGTERM отдаёт 503 на `/health`, 5 с
+  продолжает обслуживать запросы, затем ждёт активные до 20 с; worker
+  дорабатывает текущее сообщение до 45 с. `kubectl rollout restart` под
+  нагрузкой проходит без 5xx.
+- **Ресурсы.** У каждого контейнера requests и limits, `GOMEMLIMIT` ≈ 90%
+  от limit памяти; изменение ConfigMap/Secret перезапускает поды
+  (аннотации `checksum/*`).
+- **Безопасность.** Namespace в режиме Pod Security `restricted`; образы
+  distroless nonroot (UID 65532), read-only root FS, без capabilities,
+  seccomp `RuntimeDefault`. NetworkPolicy: default deny, разрешены только
+  ingress-nginx → server, monitoring → метрики и приложение → DNS, PostgreSQL,
+  S3, брокер, Jaeger. ServiceAccount без токена API и без прав.
+- **Мониторинг.** ServiceMonitor по порту `metrics` (job `avatar-service` и
+  `avatar-worker`, как в compose), алерты этапа 2 — PrometheusRule, дашборды —
+  ConfigMap для sidecar Grafana. Правила и дашборды — одни файлы для compose и
+  кластера (`deploy/helm/gophprofile/files`, `dashboards`). Без CRD Prometheus
+  Operator чарт ставится, просто без них.
+
+Проверка чартов (её же запускает CI): `make helm-check` — `helm lint` и
+kubeconform отрендеренных манифестов для local и prod, обоих брокеров,
+с CRD мониторинга и без.
+
 ## Разработка
 
 server и worker без переменных окружения не стартуют (например, `database URI
@@ -314,6 +422,7 @@ make test-short   # только unit-тесты, без контейнеров
 make cover        # покрытие; падает, если ниже 50%
 make lint         # golangci-lint v2 (конфиг .golangci.yml)
 make alerts-test  # promtool: конфиг Prometheus и тесты алертов (нужен Docker)
+make helm-check   # helm lint и kubeconform обоих чартов
 ```
 
 Интеграционные тесты поднимают PostgreSQL, SeaweedFS, RabbitMQ и Kafka через
@@ -322,7 +431,8 @@ testcontainers и пропускаются с `-short` или без Docker. Т�
 `TEST_S3_SECRET_KEY`.
 
 Миграции лежат в `internal/repository/postgres/migrations`, встроены в бинарник
-и применяются server'ом при старте (golang-migrate). Вручную: `make migrate`.
+и применяются server'ом при старте (golang-migrate, `MIGRATE_ON_START=true`)
+или подкомандой `server migrate up`. Вручную: `make migrate`.
 
 ## Структура
 
@@ -342,6 +452,10 @@ internal/broker/{rabbitmq,kafka,factory}  реализации и выбор п�
 internal/imaging               кодирование и ресайз картинок
 internal/worker                обработка событий worker'ом
 web                            HTML-шаблоны (встроены в бинарник)
-docker/Dockerfile              multi-stage сборка, цели server и worker
-deploy/observability           конфиги Prometheus, Loki, Alloy, Grafana
+docker/Dockerfile              multi-stage сборка, цели server и worker (distroless nonroot)
+deploy/observability           конфиги Prometheus, Loki, Alloy, Grafana для docker compose
+deploy/helm/gophprofile        Helm-чарт приложения; dashboards/ и files/prometheus общие с compose
+deploy/helm/gophprofile-infra  PostgreSQL, S3, брокер для локального кластера
+deploy/k8s                     namespace и values стека наблюдаемости для кластера
+docs                           OpenAPI и схема архитектуры
 ```

@@ -1,0 +1,69 @@
+# Прод: внешние управляемые PostgreSQL, S3 и брокер, секреты из
+# заранее созданного Secret (External Secrets / Sealed Secrets), TLS через
+# cert-manager. Адреса ниже — примеры, их задаёт окружение.
+#   helm upgrade --install gophprofile deploy/helm/gophprofile -n gophprofile \
+#     -f deploy/helm/gophprofile/values-prod.yaml --set server.image.tag=<git sha>
+
+broker:
+  type: kafka
+
+config:
+  environment: production
+  logLevel: info
+  s3:
+    endpoint: s3.example.com
+    useSSL: true
+  # С Kafka в проде 6 партиций avatar-events, worker — до 6 реплик.
+  kafkaBrokers: kafka-0.kafka.example.internal:9092,kafka-1.kafka.example.internal:9092,kafka-2.kafka.example.internal:9092
+  otel:
+    endpoint: jaeger-collector.monitoring:4317
+    samplerArg: "0.1"
+
+# Secret gophprofile-secrets с ключами DATABASE_URI, S3_ACCESS_KEY,
+# S3_SECRET_KEY (и RABBITMQ_URL при broker.type=rabbitmq) создаётся заранее.
+secret:
+  existingSecret: gophprofile-secrets
+
+server:
+  autoscaling:
+    minReplicas: 2
+    maxReplicas: 10
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: gophprofile
+          app.kubernetes.io/component: server
+
+worker:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 6
+
+ingress:
+  host: avatars.example.com
+  tls:
+    enabled: true
+    secretName: avatars-tls
+    clusterIssuer: letsencrypt-prod
+
+# Зависимости вне кластера: доступ по CIDR вместо podSelector.
+networkPolicy:
+  egress:
+    postgresql:
+      port: 5432
+      to:
+        - ipBlock:
+            cidr: 10.20.0.0/24
+    s3:
+      port: 443
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+    kafka:
+      port: 9092
+      to:
+        - ipBlock:
+            cidr: 10.30.0.0/24

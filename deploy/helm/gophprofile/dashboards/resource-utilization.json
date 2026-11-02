@@ -1,7 +1,7 @@
 {
   "uid": "gophprofile-resources",
   "title": "Resource utilization",
-  "description": "Ресурсы контейнеров, Go runtime, пул PostgreSQL и очереди брокера.",
+  "description": "Ресурсы контейнеров (cAdvisor в docker compose, kubelet в Kubernetes), Go runtime, пул PostgreSQL и очереди брокера.",
   "tags": [
     "gophprofile",
     "resources"
@@ -17,7 +17,56 @@
     "to": "now"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "namespace",
+        "label": "Namespace (K8s)",
+        "type": "custom",
+        "query": "gophprofile",
+        "current": {
+          "selected": true,
+          "text": "gophprofile",
+          "value": "gophprofile"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "gophprofile",
+            "value": "gophprofile"
+          }
+        ],
+        "hide": 0,
+        "description": "Namespace приложения в Kubernetes. В docker compose не используется."
+      },
+      {
+        "name": "pod",
+        "label": "Под (K8s)",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(container_cpu_usage_seconds_total{namespace=\"$namespace\", container=~\"server|worker\"}, pod)",
+          "refId": "pod"
+        },
+        "definition": "label_values(container_cpu_usage_seconds_total{namespace=\"$namespace\", container=~\"server|worker\"}, pod)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "description": "Поды server и worker в Kubernetes. В docker compose список пуст, графики берут контейнеры по имени."
+      }
+    ]
   },
   "annotations": {
     "list": []
@@ -36,7 +85,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "Контейнеры (cAdvisor)",
+      "title": "Контейнеры (cAdvisor / kubelet)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -61,7 +110,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"gophprofile-.+\"}[$__rate_interval]))",
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"gophprofile-.+\"}[$__rate_interval])) or label_replace(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", pod=~\"$pod\", container=~\"server|worker\"}[$__rate_interval])), \"name\", \"$1\", \"pod\", \"(.+)\")",
           "legendFormat": "{{name}}",
           "range": true,
           "instant": false,
@@ -127,7 +176,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"gophprofile-.+\"})",
+          "expr": "sum by (name) (container_memory_working_set_bytes{name=~\"gophprofile-.+\"}) or label_replace(sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"$pod\", container=~\"server|worker\"}), \"name\", \"$1\", \"pod\", \"(.+)\")",
           "legendFormat": "{{name}}",
           "range": true,
           "instant": false,

@@ -1,0 +1,120 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $name := include "gophprofile.fullname" . }}
+# Default deny: все поды namespace без входящих и исходящих соединений,
+# пока их не разрешит политика ниже (или чарта gophprofile-infra).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-default-deny
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# server: API от ingress-nginx, метрики от monitoring; наружу — DNS,
+# PostgreSQL, S3, брокер и OTLP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-server
+  labels:
+    {{- include "gophprofile.componentLabels" (dict "ctx" $ "component" "server") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "server") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        # helm test проверяет /health через Service.
+        - podSelector:
+            matchLabels:
+              {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "test") | nindent 14 }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+      ports:
+        - port: 9091
+          protocol: TCP
+  egress:
+    {{- include "gophprofile.np.dnsEgress" $np.dns | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.postgresql | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.s3 | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" (index $np.egress .Values.broker.type) | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.otlp | nindent 4 }}
+---
+# worker: входящие только от monitoring (метрики, пробы kubelet политикой
+# не ограничиваются); наружу — DNS, PostgreSQL, S3, брокер и OTLP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-worker
+  labels:
+    {{- include "gophprofile.componentLabels" (dict "ctx" $ "component" "worker") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "worker") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+      ports:
+        - port: 9091
+          protocol: TCP
+  egress:
+    {{- include "gophprofile.np.dnsEgress" $np.dns | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.postgresql | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.s3 | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" (index $np.egress .Values.broker.type) | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.otlp | nindent 4 }}
+---
+# Job миграций: только DNS и PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-migrate
+  labels:
+    {{- include "gophprofile.componentLabels" (dict "ctx" $ "component" "migrate") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "migrate") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "gophprofile.np.dnsEgress" $np.dns | nindent 4 }}
+    {{- include "gophprofile.np.egressTo" $np.egress.postgresql | nindent 4 }}
+---
+# Под helm test: DNS и HTTP-порт server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-test
+  labels:
+    {{- include "gophprofile.componentLabels" (dict "ctx" $ "component" "test") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "test") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "gophprofile.np.dnsEgress" $np.dns | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "server") | nindent 14 }}
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}

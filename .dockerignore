@@ -5,3 +5,5 @@ docker
 k8s
 bin
 *.out
+deploy
+*.md

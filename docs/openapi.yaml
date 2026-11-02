@@ -1,0 +1,512 @@
+openapi: 3.1.0
+info:
+  title: GophProfile API
+  version: 0.3.0
+  summary: Сервис аватарок — загрузка, хранение, миниатюры.
+  description: |
+    REST API сервиса аватарок. Пользователь определяется заголовком `X-User-ID`
+    (авторизации в v1 нет). Миниатюры 100x100 и 300x300 создаёт worker
+    асинхронно: сразу после загрузки статус — `processing`, затем `ready`
+    или `failed`.
+
+    Каждый ответ содержит `X-Trace-ID` — по нему трейс находится в Jaeger,
+    а логи запроса — в Loki.
+
+    Служебные эндпоинты `/health` и `/livez` — вне `/api/v1`. `/metrics`
+    обслуживается отдельным портом (`METRICS_ADDR`, по умолчанию 9091) и
+    наружу не публикуется.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: docker compose
+  - url: http://avatars.local
+    description: Rancher Desktop (Ingress)
+
+tags:
+  - name: avatars
+    description: Аватарки
+  - name: users
+    description: Аватарки пользователя
+  - name: service
+    description: Пробы и состояние сервиса
+
+paths:
+  /api/v1/avatars:
+    post:
+      tags: [avatars]
+      operationId: uploadAvatar
+      summary: Загрузить аватарку
+      description: |
+        Сохраняет оригинал в S3, метаданные в PostgreSQL и сразу отвечает,
+        не дожидаясь миниатюр. Тело ограничивается до чтения в память.
+      parameters:
+        - $ref: "#/components/parameters/UserIDRequired"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: JPEG, PNG или WebP до MAX_UPLOAD_SIZE (10 MiB). Формат определяется по содержимому.
+      responses:
+        "201":
+          description: Загружено, миниатюры создаются.
+          headers:
+            X-Trace-ID:
+              $ref: "#/components/headers/TraceID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Avatar"
+              example:
+                id: 0b6c6c9e-5f0e-4a35-9a43-7f3b1c2d9e10
+                user_id: user-42
+                url: /api/v1/avatars/0b6c6c9e-5f0e-4a35-9a43-7f3b1c2d9e10
+                status: processing
+                created_at: "2026-10-06T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+
+  /api/v1/avatars/{avatar_id}:
+    parameters:
+      - $ref: "#/components/parameters/AvatarID"
+    get:
+      tags: [avatars]
+      operationId: getAvatar
+      summary: Картинка — оригинал или миниатюра
+      parameters:
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/Format"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Image"
+        "304":
+          description: ETag совпал с If-None-Match.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      tags: [avatars]
+      operationId: deleteAvatar
+      summary: Удалить свою аватарку
+      description: Мягкое удаление в БД; файлы из S3 worker удаляет асинхронно.
+      parameters:
+        - $ref: "#/components/parameters/UserIDRequired"
+      responses:
+        "204":
+          description: Удалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+
+  /api/v1/avatars/{avatar_id}/metadata:
+    get:
+      tags: [avatars]
+      operationId: getAvatarMetadata
+      summary: Метаданные и ссылки на готовые миниатюры
+      parameters:
+        - $ref: "#/components/parameters/AvatarID"
+      responses:
+        "200":
+          description: Метаданные.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Metadata"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+
+  /api/v1/users/{user_id}/avatar:
+    parameters:
+      - $ref: "#/components/parameters/PathUserID"
+    get:
+      tags: [users]
+      operationId: getCurrentAvatar
+      summary: Текущая (последняя) аватарка пользователя
+      parameters:
+        - $ref: "#/components/parameters/Size"
+        - $ref: "#/components/parameters/Format"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          $ref: "#/components/responses/Image"
+        "304":
+          description: ETag совпал с If-None-Match.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      tags: [users]
+      operationId: deleteCurrentAvatar
+      summary: Удалить свою текущую аватарку
+      parameters:
+        - $ref: "#/components/parameters/UserIDRequired"
+      responses:
+        "204":
+          description: Удалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+
+  /api/v1/users/{user_id}/avatars:
+    get:
+      tags: [users]
+      operationId: listAvatars
+      summary: Список аватарок пользователя, новые сверху
+      parameters:
+        - $ref: "#/components/parameters/PathUserID"
+      responses:
+        "200":
+          description: Список (пустой, если аватарок нет).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Metadata"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/Internal"
+
+  /health:
+    get:
+      tags: [service]
+      operationId: health
+      summary: Готовность — БД, S3 и брокер (readinessProbe)
+      description: |
+        Проверяет компоненты параллельно, у каждой проверки таймаут 1 с.
+        После SIGTERM сразу отвечает 503 со статусом `shutting_down`, чтобы
+        балансировщики перестали слать запросы до остановки сервера.
+        У worker'а тот же эндпоинт на порту метрик (9091) проверяет БД и S3.
+      responses:
+        "200":
+          description: Все компоненты доступны.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example:
+                status: ok
+                broker_type: rabbitmq
+                components: { broker: ok, database: ok, storage: ok }
+        "503":
+          description: Компонент недоступен или сервис останавливается.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              examples:
+                degraded:
+                  value:
+                    status: degraded
+                    broker_type: rabbitmq
+                    components: { broker: ok, database: unavailable, storage: ok }
+                shuttingDown:
+                  value:
+                    status: shutting_down
+                    broker_type: rabbitmq
+                    components: {}
+
+  /livez:
+    get:
+      tags: [service]
+      operationId: livez
+      summary: Живость процесса (liveness и startup probe)
+      description: Зависимости не проверяет. У worker'а — на порту метрик (9091).
+      responses:
+        "200":
+          description: Процесс жив.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+
+components:
+  parameters:
+    UserIDRequired:
+      name: X-User-ID
+      in: header
+      required: true
+      description: Идентификатор пользователя. 1–255 символов, латиница, цифры и `. _ - @`.
+      schema:
+        $ref: "#/components/schemas/UserID"
+    PathUserID:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UserID"
+    AvatarID:
+      name: avatar_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Размер. Пока миниатюра не готова — 404.
+      schema:
+        type: string
+        enum: [100x100, 300x300, original]
+        default: original
+    Format:
+      name: format
+      in: query
+      required: false
+      description: Формат ответа; по умолчанию — исходный формат картинки.
+      schema:
+        type: string
+        enum: [jpeg, png, webp]
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+
+  headers:
+    TraceID:
+      description: trace_id запроса (W3C, 32 hex-символа).
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{32}$"
+
+  responses:
+    Image:
+      description: Картинка.
+      headers:
+        ETag:
+          schema:
+            type: string
+        Cache-Control:
+          description: "`max-age=86400`, если файл по этому URL не меняется; `no-cache` (сверять ETag), если за тем же URL может оказаться другой файл: текущая аватарка пользователя, ещё не готовая миниатюра."
+          schema:
+            type: string
+        X-Trace-ID:
+          $ref: "#/components/headers/TraceID"
+      content:
+        image/jpeg:
+          schema:
+            type: string
+            format: binary
+        image/png:
+          schema:
+            type: string
+            format: binary
+        image/webp:
+          schema:
+            type: string
+            format: binary
+    BadRequest:
+      description: Ошибка валидации (формат файла, X-User-ID, avatar_id, size, format).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Invalid file format
+            details: "Supported formats: jpeg, png, webp"
+    Forbidden:
+      description: Попытка удалить чужую аватарку.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Forbidden
+            details: You can only delete your own avatars
+    NotFound:
+      description: Аватарки нет, она удалена или миниатюра ещё не готова.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Avatar not found
+    TooLarge:
+      description: Файл больше MAX_UPLOAD_SIZE.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: File too large
+            max_size: 10485760
+    TooManyRequests:
+      description: Превышен лимит запросов с IP (RATE_LIMIT_RPS, RATE_LIMIT_BURST).
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Too many requests
+    Internal:
+      description: Внутренняя ошибка. Подробности — в логах по X-Trace-ID.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Internal server error
+
+  schemas:
+    UserID:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: "^[A-Za-z0-9._@-]+$"
+    Status:
+      type: string
+      enum: [processing, ready, failed]
+      description: "processing — миниатюры создаются; ready — готовы; failed — обработка не удалась."
+    Avatar:
+      type: object
+      required: [id, user_id, url, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          $ref: "#/components/schemas/UserID"
+        url:
+          type: string
+        status:
+          $ref: "#/components/schemas/Status"
+        created_at:
+          type: string
+          format: date-time
+    Metadata:
+      type: object
+      required: [id, user_id, file_name, mime_type, size, dimensions, thumbnails, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          $ref: "#/components/schemas/UserID"
+        file_name:
+          type: string
+        mime_type:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        size:
+          type: integer
+          format: int64
+          description: Размер оригинала в байтах.
+        dimensions:
+          type: object
+          required: [width, height]
+          properties:
+            width:
+              type: integer
+            height:
+              type: integer
+        thumbnails:
+          type: array
+          description: Только готовые миниатюры.
+          items:
+            type: object
+            required: [size, url]
+            properties:
+              size:
+                type: string
+                enum: [100x100, 300x300]
+              url:
+                type: string
+        status:
+          $ref: "#/components/schemas/Status"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    Health:
+      type: object
+      required: [status, broker_type, components]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, shutting_down]
+        broker_type:
+          type: string
+          enum: [rabbitmq, kafka]
+        components:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unavailable]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+        max_size:
+          type: integer
+          format: int64
+          description: Только для 413 — лимит в байтах.

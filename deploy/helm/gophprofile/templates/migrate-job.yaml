@@ -1,0 +1,56 @@
+{{- /*
+Миграции БД: Helm-хук pre-install,pre-upgrade, а не каждый под при старте —
+иначе при нескольких репликах и rolling update мигрировали бы сразу несколько
+подов. Job запускает `server migrate up` из того же образа server (миграции
+встроены через embed.FS). Если Job упал, helm upgrade завершается ошибкой
+и Deployment не обновляется: старая версия работает на старой схеме, поэтому
+миграции только совместимые вперёд.
+*/ -}}
+{{- if .Values.migrations.enabled }}
+{{- $ctx := dict "ctx" $ "component" "migrate" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-migrate
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.componentLabels" $ctx | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "gophprofile.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "gophprofile.image" (dict "ctx" $ "image" .Values.server.image) | quote }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          args: ["migrate", "up"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # Нужен только DATABASE_URI из Secret.
+          envFrom:
+            - secretRef:
+                name: {{ include "gophprofile.secretName" . }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- include "gophprofile.tmpVolume" . | nindent 8 }}
+{{- end }}

@@ -1,0 +1,13 @@
+Зависимости GophProfile для локального кластера установлены в {{ .Release.Namespace }}:
+  PostgreSQL  postgresql:5432
+  S3          seaweedfs:8333 (SeaweedFS)
+{{- if eq .Values.broker.type "rabbitmq" }}
+  RabbitMQ    rabbitmq:5672 (UI: kubectl -n {{ .Release.Namespace }} port-forward svc/rabbitmq 15672)
+{{- else }}
+  Kafka       kafka:9092
+{{- end }}
+
+Дождитесь готовности и ставьте приложение с тем же broker.type:
+  kubectl -n {{ .Release.Namespace }} rollout status statefulset/postgresql
+  helm upgrade --install gophprofile deploy/helm/gophprofile -n {{ .Release.Namespace }} \
+    -f deploy/helm/gophprofile/values-local.yaml --set broker.type={{ .Values.broker.type }}

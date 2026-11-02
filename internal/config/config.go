@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Значения по умолчанию.
@@ -23,6 +24,10 @@ const (
 	defaultOTLPEndpoint      = "jaeger:4317"
 	defaultTracesSampleRatio = 1.0
 	defaultEnvironment       = "local"
+
+	// defaultShutdownDelay — пауза между SIGTERM и остановкой HTTP-сервера:
+	// за это время ingress-nginx и kube-proxy убирают под из маршрутизации.
+	defaultShutdownDelay = 5 * time.Second
 )
 
 // Поддерживаемые брокеры сообщений.
@@ -37,6 +42,14 @@ type Config struct {
 	LogLevel      slog.Level
 	DatabaseURI   string
 	MaxUploadSize int64
+
+	// MigrateOnStart — применять миграции при старте server. В docker compose
+	// true, в Kubernetes false: там миграции применяет Helm-хук, иначе при
+	// rolling update мигрировали бы несколько подов одновременно.
+	MigrateOnStart bool
+	// ShutdownDelay — сколько после SIGTERM server отвечает 503 на /health,
+	// продолжая обслуживать запросы, прежде чем закрыть HTTP-сервер.
+	ShutdownDelay time.Duration
 
 	S3            S3Config
 	Broker        BrokerConfig
@@ -144,6 +157,19 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	migrateOnStart, err := getBool("MIGRATE_ON_START", true)
+	if err != nil {
+		return Config{}, err
+	}
+
+	shutdownDelay := defaultShutdownDelay
+	if v := getEnv("SHUTDOWN_DELAY", ""); v != "" {
+		shutdownDelay, err = time.ParseDuration(v)
+		if err != nil || shutdownDelay < 0 {
+			return Config{}, fmt.Errorf("SHUTDOWN_DELAY: want a non-negative duration like 5s, got %q", v)
+		}
+	}
+
 	// Пустой Addr net/http трактует как ":http" (порт 80) — это почти наверняка
 	// ошибка в окружении, а не намерение.
 	httpAddr := getEnv("HTTP_ADDR", defaultHTTPAddr)
@@ -156,6 +182,8 @@ func Load() (Config, error) {
 		LogLevel:           logLevel,
 		DatabaseURI:        databaseURI,
 		MaxUploadSize:      maxUploadSize,
+		MigrateOnStart:     migrateOnStart,
+		ShutdownDelay:      shutdownDelay,
 		S3:                 s3,
 		Broker:             broker,
 		RateLimit:          rateLimit,
@@ -277,6 +305,19 @@ func loadBroker() (BrokerConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// getBool читает булеву переменную окружения; не задана или пустая — def.
+func getBool(key string, def bool) (bool, error) {
+	v := getEnv(key, "")
+	if v == "" {
+		return def, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", key, err)
+	}
+	return b, nil
 }
 
 // getEnv возвращает значение переменной окружения или def, если она не задана.

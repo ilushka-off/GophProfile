@@ -1,0 +1,9 @@
+# Не упаковываются в чарт.
+.DS_Store
+.git/
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig

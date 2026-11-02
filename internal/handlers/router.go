@@ -11,9 +11,14 @@ import (
 	"go-avatar-service/internal/middleware"
 )
 
-// pathHealth — служебный путь вне API: его не трейсят и не считают в метриках
-// запросов. /metrics здесь нет: он на отдельном адресе (METRICS_ADDR).
-const pathHealth = "/health"
+// Служебные пути вне API: их не трейсят и не считают в метриках запросов.
+// /metrics здесь нет: он на отдельном адресе (METRICS_ADDR).
+const (
+	// PathHealth — готовность: сервис и его зависимости (readinessProbe).
+	PathHealth = "/health"
+	// PathLivez — живость процесса без проверки зависимостей (liveness, startup).
+	PathLivez = "/livez"
+)
 
 // RouterOptions — настройки защитных middleware.
 type RouterOptions struct {
@@ -33,12 +38,12 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	// Трейсинг первым: спан из контекста нужен логам (trace_id) и всем ниже.
-	r.Use(middleware.Tracing(pathHealth))
+	r.Use(middleware.Tracing(PathHealth, PathLivez))
 	if opts.HTTPMetrics != nil {
-		r.Use(opts.HTTPMetrics.Middleware(pathHealth))
+		r.Use(opts.HTTPMetrics.Middleware(PathHealth, PathLivez))
 	}
 	// Logger снаружи Recoverer, чтобы паника попала в лог как запрос со статусом 500.
-	r.Use(middleware.Logger(logger))
+	r.Use(middleware.Logger(logger, PathHealth, PathLivez))
 	r.Use(middleware.Recoverer(logger))
 	// CORS до роутинга: на preflight OPTIONS chi иначе ответил бы 405.
 	r.Use(middleware.CORS(opts.CORSAllowedOrigins))
@@ -50,8 +55,9 @@ func NewRouter(logger *slog.Logger, opts RouterOptions, healthHandler *HealthHan
 		httpx.WriteError(w, http.StatusMethodNotAllowed, msgMethodNotAllowed, "")
 	})
 
-	// /health не ограничивается: его дёргает healthcheck docker compose.
-	r.Get(pathHealth, healthHandler.Check)
+	// Пробы не ограничиваются: их дёргают healthcheck docker compose и kubelet.
+	r.Get(PathHealth, healthHandler.Check)
+	r.Get(PathLivez, Live)
 
 	// Один лимитер на API и веб: у клиента одно ведро на весь сервис.
 	rateLimit := middleware.RateLimit(opts.RateLimitRPS, opts.RateLimitBurst, func(w http.ResponseWriter, _ *http.Request) {

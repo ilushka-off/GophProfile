@@ -1,0 +1,77 @@
+# Только для локального кластера: один экземпляр каждого сервиса, учётки
+# по умолчанию совпадают с values-local.yaml чарта gophprofile и с .env.example
+# docker compose. Все поды проходят Pod Security «restricted».
+
+# rabbitmq или kafka — какой брокер поднять (как broker.type у gophprofile).
+broker:
+  type: rabbitmq
+
+# Лейблы подов приложения (чарт gophprofile), которым разрешён доступ к
+# зависимостям по NetworkPolicy.
+appSelector:
+  app.kubernetes.io/name: gophprofile
+
+networkPolicy:
+  enabled: true
+  monitoringNamespace: monitoring
+  dns:
+    namespace: kube-system
+    podLabels:
+      k8s-app: kube-dns
+
+# ServiceMonitor для брокера и S3 (если есть CRD Prometheus Operator).
+monitoring:
+  enabled: true
+  labels:
+    release: kps
+
+persistence:
+  # false — данные в emptyDir и пропадают вместе с подом.
+  enabled: true
+  # Пусто — StorageClass по умолчанию (local-path в k3s).
+  storageClass: ""
+
+postgresql:
+  image: postgres:17-alpine
+  database: gophprofile
+  username: gophprofile
+  password: gophprofile
+  size: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+# S3-совместимое хранилище. Как и в docker compose — SeaweedFS: образы
+# MinIO больше не публикуются.
+s3:
+  image: chrislusf/seaweedfs:4.48
+  accessKey: gophprofile
+  secretKey: gophprofile-secret
+  size: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+rabbitmq:
+  image: rabbitmq:4.1-management-alpine
+  username: gophprofile
+  password: gophprofile
+  size: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+kafka:
+  image: apache/kafka:3.9.1
+  # KRaft, один узел. Топики (avatar-events на 3 партиции) создаёт приложение.
+  clusterId: 4L6g3nShT-eMCtK--X86sw
+  size: 2Gi
+  resources:
+    requests: { cpu: 200m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1536Mi }
+  exporter:
+    enabled: true
+    image: danielqsj/kafka-exporter:v1.10.0
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { cpu: 200m, memory: 128Mi }

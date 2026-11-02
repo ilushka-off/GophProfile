@@ -1,0 +1,62 @@
+# Loki одним процессом (single binary) с хранением на диске — как в docker
+# compose. Адрес для Alloy и Grafana: http://loki.monitoring:3100.
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    # Как у метрик в Prometheus: неделя.
+    retention_period: 168h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Режим SimpleScalable выключен целиком.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Без gateway: Alloy и Grafana ходят в Service loki напрямую.
+gateway:
+  enabled: false
+
+# Кэши, canary и тесты чарта локально не нужны.
+memcached:
+  enabled: false
+memcachedExporter:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false

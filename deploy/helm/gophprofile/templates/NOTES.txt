@@ -1,0 +1,25 @@
+GophProfile {{ .Chart.AppVersion }} установлен в namespace {{ .Release.Namespace }} (брокер: {{ .Values.broker.type }}).
+
+{{- if .Values.ingress.enabled }}
+
+Веб-интерфейс: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/web/upload
+API:           http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/api/v1
+{{- if not .Values.ingress.tls.enabled }}
+Для локального кластера добавьте в hosts: 127.0.0.1 {{ .Values.ingress.host }}
+{{- end }}
+{{- else }}
+
+Ingress выключен. Доступ через port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gophprofile.fullname" . }}-server 8080:{{ .Values.server.service.port }}
+{{- end }}
+
+Проверка:
+  kubectl -n {{ .Release.Namespace }} get pods,hpa
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+{{- if and .Values.monitoring.enabled (not (include "gophprofile.monitoringAvailable" .)) }}
+
+ВНИМАНИЕ: в кластере нет CRD monitoring.coreos.com/v1 (kube-prometheus-stack),
+ServiceMonitor и PrometheusRule не созданы. Поставьте стек (make k8s-observability)
+и повторите helm upgrade.
+{{- end }}

@@ -1,4 +1,5 @@
-# Дашборды как код: JSON из deploy/observability/grafana/dashboards.
+# Дашборды как код: JSON из deploy/helm/gophprofile/dashboards (те же файлы
+# в Kubernetes едут в ConfigMap с лейблом grafana_dashboard).
 # Правки в UI не сохраняются — меняйте файлы.
 apiVersion: 1
 

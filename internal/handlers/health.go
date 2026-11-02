@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-avatar-service/internal/httpx"
@@ -18,6 +19,9 @@ const healthCheckTimeout = time.Second
 const (
 	healthOK       = "ok"
 	healthDegraded = "degraded"
+	// healthShuttingDown — получен SIGTERM: под доживает последние секунды,
+	// новые запросы на него слать не нужно.
+	healthShuttingDown = "shutting_down"
 
 	componentOK          = "ok"
 	componentUnavailable = "unavailable"
@@ -71,30 +75,54 @@ type healthResponse struct {
 	Components map[string]string `json:"components"`
 }
 
-// HealthHandler обслуживает проверку живости: отвечает о доступности сервиса и его зависимостей.
+// HealthHandler обслуживает проверку готовности: отвечает о доступности сервиса
+// и его зависимостей. В Kubernetes это readinessProbe.
 type HealthHandler struct {
 	brokerType string
 	components []component
 	logger     *slog.Logger
+	draining   atomic.Bool
 }
 
 // NewHealthHandler создаёт HealthHandler, который проверяет БД, S3 и брокер.
-// brokerType — значение BROKER из конфига (rabbitmq или kafka).
+// brokerType — значение BROKER из конфига (rabbitmq или kafka). broker == nil —
+// брокер не проверяется: у worker'а потеря соединения с брокером и так
+// завершает процесс.
 func NewHealthHandler(db pinger, storage bucketChecker, broker pinger, brokerType string, logger *slog.Logger) *HealthHandler {
+	components := []component{
+		{name: componentDatabase, p: db},
+		{name: componentStorage, p: storagePinger{storage: storage}},
+	}
+	if broker != nil {
+		components = append(components, component{name: componentBroker, p: broker})
+	}
 	return &HealthHandler{
 		brokerType: brokerType,
-		components: []component{
-			{name: componentDatabase, p: db},
-			{name: componentStorage, p: storagePinger{storage: storage}},
-			{name: componentBroker, p: broker},
-		},
-		logger: logger,
+		components: components,
+		logger:     logger,
 	}
+}
+
+// Drain переводит /health в 503 «shutting_down» без проверки зависимостей.
+// Вызывается по SIGTERM, чтобы балансировщики перестали слать запросы до того,
+// как HTTP-сервер закроется.
+func (h *HealthHandler) Drain() {
+	h.draining.Store(true)
 }
 
 // Check проверяет компоненты параллельно, у каждой проверки свой таймаут.
 // Отвечает 200 со статусом "ok", если все доступны, и 503 со статусом "degraded", если нет.
+// После Drain всегда отвечает 503 со статусом "shutting_down".
 func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
+	if h.draining.Load() {
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, healthResponse{
+			Status:     healthShuttingDown,
+			BrokerType: h.brokerType,
+			Components: map[string]string{},
+		})
+		return
+	}
+
 	results := make([]string, len(h.components))
 
 	var wg sync.WaitGroup
@@ -130,4 +158,16 @@ func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 	}
 	httpx.WriteJSON(w, status, resp)
+}
+
+// livezResponse — ответ /livez: {"status":"ok"}.
+type livezResponse struct {
+	Status string `json:"status"`
+}
+
+// Live — проверка живости процесса (livenessProbe и startupProbe). Зависимости
+// не проверяет: если упадёт БД, перезапуск подов не поможет, а только добавит
+// нагрузки. Отвечает 200, пока процесс способен обслужить HTTP-запрос.
+func Live(w http.ResponseWriter, _ *http.Request) {
+	httpx.WriteJSON(w, http.StatusOK, livezResponse{Status: healthOK})
 }

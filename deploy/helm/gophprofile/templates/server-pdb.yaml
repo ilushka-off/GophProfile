@@ -1,0 +1,20 @@
+{{- /*
+PDB: при drain узла хотя бы один под server остаётся. С одним подом
+(local, HPA min=1) drain ждёт, пока HPA или rollout не поднимут второй.
+*/ -}}
+{{- if .Values.server.pdb.enabled }}
+{{- $ctx := dict "ctx" $ "component" "server" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-server
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.server.pdb.minAvailable }}
+  # Под, который не прошёл readiness, можно вытеснять и при нарушенном бюджете.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" $ctx | nindent 6 }}
+{{- end }}

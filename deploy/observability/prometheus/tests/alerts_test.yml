@@ -1,6 +1,8 @@
 # promtool test rules deploy/observability/prometheus/tests/alerts_test.yml
+# Правила — в чарте (deploy/helm/gophprofile/files/prometheus), make alerts-test
+# монтирует их в /prometheus-rules.
 rule_files:
-  - ../rules/alerts.yml
+  - /prometheus-rules/alerts.yml
 
 evaluation_interval: 1m
 

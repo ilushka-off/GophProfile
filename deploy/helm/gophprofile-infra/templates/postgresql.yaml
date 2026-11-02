@@ -1,0 +1,81 @@
+{{- $ctx := dict "ctx" $ "name" "postgresql" "component" "postgresql" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "infra.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  serviceName: postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "infra.componentLabels" $ctx | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      # Пользователь postgres в образе alpine — UID/GID 70.
+      securityContext:
+        {{- include "infra.podSecurityContext" (dict "uid" 70 "gid" 70) | nindent 8 }}
+      containers:
+        - name: postgresql
+          image: {{ .Values.postgresql.image }}
+          securityContext:
+            {{- include "infra.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "infra.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            # Подкаталог: в корне тома может быть lost+found, initdb такой не примет.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: postgresql
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: run
+          emptyDir: {}
+        {{- include "infra.dataVolume" . | nindent 8 }}
+  {{- include "infra.volumeClaimTemplates" (dict "ctx" $ "size" .Values.postgresql.size) | nindent 2 }}

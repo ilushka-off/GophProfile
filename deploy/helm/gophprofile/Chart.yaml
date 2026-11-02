@@ -1,0 +1,21 @@
+apiVersion: v2
+name: gophprofile
+description: >-
+  GophProfile — сервис аватарок: server (REST API и веб), worker (миниатюры),
+  миграции БД (Helm-хук), автомасштабирование, мониторинг и сетевые политики.
+type: application
+# Версия чарта. Меняется при любом изменении шаблонов или values.
+version: 0.3.0
+# Версия образов gophprofile/server и gophprofile/worker по умолчанию
+# (server.image.tag и worker.image.tag пустые). Не latest: с latest
+# helm upgrade не меняет спеку и поды не перезапускаются.
+appVersion: "0.3.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/ilushka-off/GophProfile
+sources:
+  - https://github.com/ilushka-off/GophProfile
+keywords:
+  - avatars
+  - go
+maintainers:
+  - name: Ilya

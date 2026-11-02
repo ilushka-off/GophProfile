@@ -1,0 +1,41 @@
+# Rancher Desktop (k3s): зависимости из релиза gophprofile-infra в том же
+# namespace, ingress-nginx, стек наблюдаемости в namespace monitoring.
+#   helm upgrade --install gophprofile deploy/helm/gophprofile -n gophprofile \
+#     -f deploy/helm/gophprofile/values-local.yaml
+# С Kafka: --set broker.type=kafka (и тот же broker.type у gophprofile-infra).
+
+broker:
+  type: rabbitmq
+
+config:
+  environment: local
+  s3:
+    endpoint: seaweedfs:8333
+    useSSL: false
+  kafkaBrokers: kafka:9092
+  otel:
+    endpoint: jaeger-collector.monitoring:4317
+    samplerArg: "1.0"
+
+# Локальный Secret создаёт чарт. Значения совпадают с учётками по умолчанию
+# чарта gophprofile-infra и годятся только для локального кластера.
+secret:
+  values:
+    DATABASE_URI: postgres://gophprofile:gophprofile@postgresql:5432/gophprofile?sslmode=disable
+    S3_ACCESS_KEY: gophprofile
+    S3_SECRET_KEY: gophprofile-secret
+    RABBITMQ_URL: amqp://gophprofile:gophprofile@rabbitmq:5672/
+
+server:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 3
+
+worker:
+  # С Kafka не больше 3 — по числу партиций avatar-events.
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 3
+
+ingress:
+  host: avatars.local

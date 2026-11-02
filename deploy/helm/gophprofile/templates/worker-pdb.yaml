@@ -1,0 +1,15 @@
+{{- if .Values.worker.pdb.enabled }}
+{{- $ctx := dict "ctx" $ "component" "worker" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-worker
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.worker.pdb.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" $ctx | nindent 6 }}
+{{- end }}

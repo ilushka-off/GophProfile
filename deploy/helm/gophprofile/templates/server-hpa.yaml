@@ -1,0 +1,42 @@
+{{- with .Values.server.autoscaling }}
+{{- if .enabled }}
+{{- $ctx := dict "ctx" $ "component" "server" }}
+# Процент считается от requests, поэтому requests в values обязательны.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "gophprofile.fullname" $ }}-server
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "gophprofile.fullname" $ }}-server
+  minReplicas: {{ .minReplicas }}
+  maxReplicas: {{ .maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetCPUUtilizationPercentage }}
+    {{- if .targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .targetMemoryUtilizationPercentage }}
+    {{- end }}
+  behavior:
+    # Спад плавный: после пика нагрузки поды убираются по одному раз в минуту.
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+{{- end }}
+{{- end }}

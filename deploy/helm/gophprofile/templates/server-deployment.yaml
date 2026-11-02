@@ -1,0 +1,98 @@
+{{- $ctx := dict "ctx" $ "component" "server" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-server
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+spec:
+  {{- /* При включённом HPA replicas не рендерится: иначе каждый helm upgrade
+  сбрасывал бы число подов, выставленное HPA. */}}
+  {{- if not .Values.server.autoscaling.enabled }}
+  replicas: {{ .Values.server.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "gophprofile.componentSelectorLabels" $ctx | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Новый под поднимается и проходит readiness до остановки старого.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.componentLabels" $ctx | nindent 8 }}
+        {{- with .Values.server.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "gophprofile.checksums" . | nindent 8 }}
+        {{- with .Values.server.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "gophprofile.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # SIGTERM → /health 503 → пауза SHUTDOWN_DELAY → Shutdown до 20 с.
+      terminationGracePeriodSeconds: {{ .Values.server.terminationGracePeriodSeconds }}
+      containers:
+        - name: server
+          image: {{ include "gophprofile.image" (dict "ctx" $ "image" .Values.server.image) | quote }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          envFrom:
+            {{- include "gophprofile.envFrom" . | nindent 12 }}
+          env:
+            # ≈90% limits.memory: GC успевает до OOMKill. GOMAXPROCS Go сам
+            # берёт из CPU limit.
+            - name: GOMEMLIMIT
+              value: {{ include "gophprofile.gomemlimit" .Values.server.resources.limits.memory | quote }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            {{- include "gophprofile.probe" (dict "probe" .Values.server.probes.startup "port" "http") | nindent 12 }}
+          livenessProbe:
+            {{- include "gophprofile.probe" (dict "probe" .Values.server.probes.liveness "port" "http") | nindent 12 }}
+          readinessProbe:
+            {{- include "gophprofile.probe" (dict "probe" .Values.server.probes.readiness "port" "http") | nindent 12 }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- include "gophprofile.tmpVolume" . | nindent 8 }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

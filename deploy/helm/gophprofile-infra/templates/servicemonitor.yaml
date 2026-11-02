@@ -1,0 +1,39 @@
+{{- /*
+Метрики брокера и S3 для дашбордов и алерта DLQNotEmpty. Только при CRD
+Prometheus Operator. job = имя Service: rabbitmq, kafka-exporter, seaweedfs.
+*/ -}}
+{{- if include "infra.monitoringAvailable" . }}
+{{- $targets := list (dict "name" "seaweedfs" "component" "s3" "port" "metrics" "path" "/metrics") }}
+{{- if eq .Values.broker.type "rabbitmq" }}
+{{- /* /metrics/per-object — метрики по каждой очереди, в том числе avatars.dlq. */}}
+{{- $targets = append $targets (dict "name" "rabbitmq" "component" "rabbitmq" "port" "prometheus" "path" "/metrics/per-object") }}
+{{- else if .Values.kafka.exporter.enabled }}
+{{- $targets = append $targets (dict "name" "kafka-exporter" "component" "kafka-exporter" "port" "metrics" "path" "/metrics") }}
+{{- end }}
+{{- range $targets }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "infra.componentLabels" (dict "ctx" $ "name" .name "component" .component) | nindent 4 }}
+    {{- with $.Values.monitoring.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $.Release.Namespace }}
+  endpoints:
+    - port: {{ .port }}
+      path: {{ .path }}
+      interval: 30s
+      relabelings:
+        - targetLabel: instance
+          replacement: {{ .name }}
+{{- end }}
+{{- end }}

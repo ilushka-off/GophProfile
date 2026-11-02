@@ -1,4 +1,6 @@
-# Алерты Prometheus. Тесты: deploy/observability/prometheus/tests (make alerts-test).
+# Алерты Prometheus — одна копия для docker compose (смонтирована в Prometheus)
+# и Kubernetes (шаблон prometheusrule.yaml кладёт её в PrometheusRule).
+# Тесты: deploy/observability/prometheus/tests (make alerts-test).
 groups:
   - name: gophprofile
     rules:

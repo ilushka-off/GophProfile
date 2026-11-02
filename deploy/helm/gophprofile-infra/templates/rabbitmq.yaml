@@ -1,0 +1,105 @@
+{{- if eq .Values.broker.type "rabbitmq" }}
+{{- $ctx := dict "ctx" $ "name" "rabbitmq" "component" "rabbitmq" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-plugins
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+data:
+  # rabbitmq_prometheus: глубина очередей и DLQ на :15692.
+  enabled_plugins: "[rabbitmq_management,rabbitmq_prometheus]."
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "infra.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+    - name: prometheus
+      port: 15692
+      targetPort: prometheus
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  serviceName: rabbitmq
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "infra.componentLabels" $ctx | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      # Пользователь rabbitmq в образе alpine — UID 100, GID 101.
+      securityContext:
+        {{- include "infra.podSecurityContext" (dict "uid" 100 "gid" 101) | nindent 8 }}
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.rabbitmq.image }}
+          securityContext:
+            {{- include "infra.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: {{ .Values.rabbitmq.username | quote }}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "infra.secretName" . }}
+                  key: RABBITMQ_DEFAULT_PASS
+            # Имя узла не зависит от имени пода: данные на томе переживают пересоздание.
+            - name: RABBITMQ_NODENAME
+              value: rabbit@localhost
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+            - name: prometheus
+              containerPort: 15692
+          readinessProbe:
+            tcpSocket:
+              port: amqp
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+          resources:
+            {{- toYaml .Values.rabbitmq.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            - name: plugins
+              mountPath: /etc/rabbitmq/enabled_plugins
+              subPath: enabled_plugins
+              readOnly: true
+      volumes:
+        - name: plugins
+          configMap:
+            name: rabbitmq-plugins
+        {{- include "infra.dataVolume" . | nindent 8 }}
+  {{- include "infra.volumeClaimTemplates" (dict "ctx" $ "size" .Values.rabbitmq.size) | nindent 2 }}
+{{- end }}

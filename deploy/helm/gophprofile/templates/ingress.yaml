@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+{{- $ctx := dict "ctx" $ "component" "server" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "gophprofile.fullname" . }}
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+  annotations:
+    # Тело запроса до лимита загрузки (MAX_UPLOAD_SIZE) плюс multipart.
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.proxyBodySize | quote }}
+    # Загрузка не буферизуется на диск nginx целиком перед отправкой в server.
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ required "ingress.tls.secretName обязателен при ingress.tls.enabled" .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # /metrics на этом порту нет: он на METRICS_ADDR (9091), который
+          # Ingress не публикует.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "gophprofile.fullname" . }}-server
+                port:
+                  name: http
+{{- end }}
