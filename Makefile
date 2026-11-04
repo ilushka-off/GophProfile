@@ -79,7 +79,7 @@ lint: ## Запустить golangci-lint (конфиг .golangci.yml)
 
 alerts-test: ## Проверить конфиг Prometheus и прогнать тесты алертов (нужен Docker)
 	$(PROMTOOL) check config --syntax-only prometheus.yml
-	$(PROMTOOL) check rules rules/alerts.yml
+	$(PROMTOOL) check rules /prometheus-rules/alerts.yml
 	$(PROMTOOL) test rules tests/alerts_test.yml
 
 migrate: ## Применить миграции к DATABASE_URI

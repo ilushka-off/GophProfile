@@ -57,11 +57,11 @@ flowchart LR
 | Service (ClusterIP) | `http` 80→8080, `metrics` 9091 | `metrics` 9091 | — |
 | Ingress | ingress-nginx, `proxy-body-size` | — | — |
 | HorizontalPodAutoscaler | CPU 70%, RAM 80% | CPU 70% | — |
-| PodDisruptionBudget | `minAvailable: 1` | `minAvailable: 1` | — |
+| PodDisruptionBudget | `minAvailable: 1` | `maxUnavailable: 1`: единственный под не блокирует drain узла | — |
 | ServiceMonitor | ✅ | ✅ | `jobLabel: app` → job `avatar-service` / `avatar-worker` |
 | ConfigMap, Secret | — | — | `gophprofile-config`, `gophprofile-secrets` (или `existingSecret`) |
 | ServiceAccount | — | — | без токена API и без прав |
-| NetworkPolicy | ingress-nginx → 8080, monitoring → 9091 | monitoring → 9091 | default deny; DNS, PostgreSQL, S3, брокер, OTLP |
+| NetworkPolicy | ingress-nginx → 8080, monitoring → 9091 | monitoring → 9091 | default deny; DNS, PostgreSQL, S3, брокер, OTLP; при строгом CNI пробы разрешаются через `networkPolicy.probeSources` |
 | Job (Helm hook) | — | — | `server migrate up` |
 | PrometheusRule, дашборды | — | — | алерты и 4 дашборда этапа 2 |
 

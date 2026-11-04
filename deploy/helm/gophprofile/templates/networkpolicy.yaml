@@ -13,8 +13,8 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-# server: API от ingress-nginx, метрики от monitoring; наружу — DNS,
-# PostgreSQL, S3, брокер и OTLP.
+# server: API от ingress-nginx, метрики от monitoring, пробы — от
+# networkPolicy.probeSources; наружу — DNS, PostgreSQL, S3, брокер и OTLP.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -35,6 +35,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "gophprofile.componentSelectorLabels" (dict "ctx" $ "component" "test") | nindent 14 }}
+        {{- with $np.probeSources }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       ports:
         - port: 8080
           protocol: TCP
@@ -52,8 +55,8 @@ spec:
     {{- include "gophprofile.np.egressTo" (index $np.egress .Values.broker.type) | nindent 4 }}
     {{- include "gophprofile.np.egressTo" $np.egress.otlp | nindent 4 }}
 ---
-# worker: входящие только от monitoring (метрики, пробы kubelet политикой
-# не ограничиваются); наружу — DNS, PostgreSQL, S3, брокер и OTLP.
+# worker: метрики от monitoring, пробы — от networkPolicy.probeSources (нужно не
+# для всех CNI, см. values.yaml); наружу — DNS, PostgreSQL, S3, брокер и OTLP.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -70,6 +73,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+        {{- with $np.probeSources }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       ports:
         - port: 9091
           protocol: TCP

@@ -1,3 +1,8 @@
+{{- /*
+PDB: maxUnavailable, а не minAvailable: при HPA min=1 бюджет minAvailable: 1
+блокировал бы drain узла бесконечно. Жёсткая гарантия доступности worker'у не
+нужна: сообщения без подтверждения брокер доставит повторно.
+*/ -}}
 {{- if .Values.worker.pdb.enabled }}
 {{- $ctx := dict "ctx" $ "component" "worker" }}
 apiVersion: policy/v1
@@ -7,7 +12,7 @@ metadata:
   labels:
     {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
 spec:
-  minAvailable: {{ .Values.worker.pdb.minAvailable }}
+  maxUnavailable: {{ .Values.worker.pdb.maxUnavailable }}
   unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:

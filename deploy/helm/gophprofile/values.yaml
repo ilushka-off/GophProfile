@@ -159,9 +159,11 @@ worker:
     targetCPUUtilizationPercentage: 70
     # null — без метрики памяти.
     targetMemoryUtilizationPercentage: null
+  # maxUnavailable: единственный под можно вытеснить при drain узла, сообщения
+  # без подтверждения брокер доставит повторно.
   pdb:
     enabled: true
-    minAvailable: 1
+    maxUnavailable: 1
   # /livez и /health worker'а — на порту метрик 9091.
   probes:
     startup:
@@ -243,6 +245,14 @@ networkPolicy:
   # Namespace контроллера Ingress и стека мониторинга.
   ingressControllerNamespace: ingress-nginx
   monitoringNamespace: monitoring
+  # Дополнительные источники (NetworkPolicyPeer) на порты проб server и worker.
+  # kubelet ходит с адреса узла: k3s/Flannel такой трафик политикой не ограничивают,
+  # а Calico и Cilium в строгих конфигурациях могут ограничивать — тогда без этого
+  # списка пробы отклоняются и liveness перезапускает поды. Указывайте ipBlock с
+  # CIDR узлов: kubelet работает не в поде, namespaceSelector его обычно не покрывает.
+  probeSources: []
+  #   - ipBlock:
+  #       cidr: 10.0.0.0/16
   # CoreDNS (в k3s и большинстве дистрибутивов — kube-system, k8s-app=kube-dns).
   dns:
     namespace: kube-system

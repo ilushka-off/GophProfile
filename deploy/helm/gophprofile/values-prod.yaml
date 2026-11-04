@@ -51,6 +51,11 @@ ingress:
 
 # Зависимости вне кластера: доступ по CIDR вместо podSelector.
 networkPolicy:
+  # Если CNI ограничивает трафик с узлов (Calico, Cilium в строгих конфигурациях) —
+  # CIDR узлов, иначе пробы kubelet будут отклонены. Подробнее — values.yaml.
+  # probeSources:
+  #   - ipBlock:
+  #       cidr: 10.0.0.0/16
   egress:
     postgresql:
       port: 5432

@@ -395,7 +395,9 @@ NetworkPolicy к зависимостям по CIDR. Все параметры �
   distroless nonroot (UID 65532), read-only root FS, без capabilities,
   seccomp `RuntimeDefault`. NetworkPolicy: default deny, разрешены только
   ingress-nginx → server, monitoring → метрики и приложение → DNS, PostgreSQL,
-  S3, брокер, Jaeger. ServiceAccount без токена API и без прав.
+  S3, брокер, Jaeger. Если CNI ограничивает трафик с узлов (Calico, Cilium в
+  строгих конфигурациях), для проб kubelet задайте CIDR узлов в
+  `networkPolicy.probeSources`. ServiceAccount без токена API и без прав.
 - **Мониторинг.** ServiceMonitor по порту `metrics` (job `avatar-service` и
   `avatar-worker`, как в compose), алерты этапа 2 — PrometheusRule, дашборды —
   ConfigMap для sidecar Grafana. Правила и дашборды — одни файлы для compose и

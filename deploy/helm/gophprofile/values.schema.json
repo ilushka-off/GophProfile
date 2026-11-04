@@ -68,9 +68,19 @@
     "pdb": {
       "type": "object",
       "required": ["enabled", "minAvailable"],
+      "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
         "minAvailable": { "type": ["integer", "string"] }
+      }
+    },
+    "workerPdb": {
+      "type": "object",
+      "required": ["enabled", "maxUnavailable"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxUnavailable": { "type": ["integer", "string"] }
       }
     },
     "probe": {
@@ -108,7 +118,6 @@
         "replicaCount": { "type": "integer", "minimum": 0 },
         "resources": { "$ref": "#/definitions/resources" },
         "autoscaling": { "$ref": "#/definitions/autoscaling" },
-        "pdb": { "$ref": "#/definitions/pdb" },
         "probes": { "$ref": "#/definitions/probes" },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
         "extraEnv": { "type": "array" }
@@ -191,6 +200,7 @@
           "type": "object",
           "required": ["service", "shutdownDelay"],
           "properties": {
+            "pdb": { "$ref": "#/definitions/pdb" },
             "shutdownDelay": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$" },
             "service": {
               "type": "object",
@@ -204,7 +214,17 @@
         }
       ]
     },
-    "worker": { "$ref": "#/definitions/component" },
+    "worker": {
+      "allOf": [
+        { "$ref": "#/definitions/component" },
+        {
+          "type": "object",
+          "properties": {
+            "pdb": { "$ref": "#/definitions/workerPdb" }
+          }
+        }
+      ]
+    },
     "migrations": {
       "type": "object",
       "properties": {
@@ -249,6 +269,7 @@
         "enabled": { "type": "boolean" },
         "ingressControllerNamespace": { "type": "string" },
         "monitoringNamespace": { "type": "string" },
+        "probeSources": { "type": "array", "items": { "type": "object" } },
         "dns": {
           "type": "object",
           "required": ["namespace", "podLabels"],
