@@ -41,10 +41,14 @@ func MetricsHandler(reg *prometheus.Registry) http.Handler {
 
 // ServeMetrics поднимает HTTP-сервер с /metrics на addr и держит его до
 // отмены ctx. У server это отдельный от API адрес, который не публикуется
-// наружу, у worker'а — единственный HTTP-сервер.
-func ServeMetrics(ctx context.Context, addr string, reg *prometheus.Registry) error {
+// наружу, у worker'а — единственный HTTP-сервер, поэтому через extra на нём же
+// живут пробы /livez и /health. Ключ extra — путь, запросы принимаются только GET.
+func ServeMetrics(ctx context.Context, addr string, reg *prometheus.Registry, extra map[string]http.Handler) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", MetricsHandler(reg))
+	for path, h := range extra {
+		mux.Handle("GET "+path, h)
+	}
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: metricsReadHeaderTimeout}
 
 	errCh := make(chan error, 1)

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: gophprofile-infra
+description: >-
+  Зависимости GophProfile для локального кластера (Rancher Desktop):
+  PostgreSQL, S3 (SeaweedFS), RabbitMQ или Kafka. Отдельный релиз: хук
+  миграций чарта gophprofile запускается до его ресурсов, и база к этому
+  моменту уже должна работать. В проде вместо него — управляемые сервисы.
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/ilushka-off/GophProfile
+maintainers:
+  - name: Ilya

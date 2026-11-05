@@ -1,0 +1,17 @@
+{{- /* Service worker'а нужен только ServiceMonitor: трафика на worker нет. */ -}}
+{{- $ctx := dict "ctx" $ "component" "worker" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-worker
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gophprofile.componentSelectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP

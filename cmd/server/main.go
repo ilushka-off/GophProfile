@@ -32,7 +32,10 @@ const (
 	readTimeout       = 30 * time.Second
 	writeTimeout      = 30 * time.Second
 	idleTimeout       = 60 * time.Second
-	shutdownTimeout   = 10 * time.Second
+	// shutdownTimeout — сколько ждать завершения активных запросов после
+	// ShutdownDelay. Вместе с паузой и закрытием соединений укладывается
+	// в terminationGracePeriodSeconds: 30 пода server.
+	shutdownTimeout = 20 * time.Second
 )
 
 // storageInitTimeout ограничивает проверку и создание бакета при старте,
@@ -46,7 +49,7 @@ var version = "dev"
 const telemetryShutdownTimeout = 5 * time.Second
 
 func main() {
-	if err := run(); err != nil {
+	if err := runCommand(os.Args[1:]); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}
@@ -78,8 +81,12 @@ func run() error {
 		}
 	}()
 
-	if err := postgres.RunMigrations(cfg.DatabaseURI); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
+	// В Kubernetes миграции применяет Helm-хук (server migrate up) до выката
+	// подов, поэтому там MIGRATE_ON_START=false.
+	if cfg.MigrateOnStart {
+		if err := postgres.RunMigrations(cfg.DatabaseURI); err != nil {
+			return fmt.Errorf("run migrations: %w", err)
+		}
 	}
 
 	pool, err := postgres.OpenPool(ctx, cfg.DatabaseURI)
@@ -123,6 +130,7 @@ func run() error {
 		return fmt.Errorf("create avatar service: %w", err)
 	}
 
+	healthHandler := handlers.NewHealthHandler(pool, fileStorage, publisher, cfg.Broker.Kind, logger)
 	router := handlers.NewRouter(logger,
 		handlers.RouterOptions{
 			RateLimitRPS:       cfg.RateLimit.RPS,
@@ -130,7 +138,7 @@ func run() error {
 			CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 			HTTPMetrics:        middleware.NewHTTPMetrics(metrics),
 		},
-		handlers.NewHealthHandler(pool, fileStorage, publisher, cfg.Broker.Kind, logger),
+		healthHandler,
 		handlers.NewAvatarHandler(avatarService, cfg.MaxUploadSize, logger),
 		handlers.NewWebHandler(avatarService, templates, cfg.MaxUploadSize, logger),
 	)
@@ -149,17 +157,22 @@ func run() error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		slog.Info("serving metrics", "addr", cfg.Observability.MetricsAddr)
-		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics)
+		return observability.ServeMetrics(ctx, cfg.Observability.MetricsAddr, metrics, nil)
 	})
 	g.Go(func() error {
 		slog.Info("starting server", "addr", cfg.HTTPAddr, "broker", cfg.Broker.Kind)
-		return serveHTTP(ctx, srv)
+		return serveHTTP(ctx, srv, healthHandler, cfg.ShutdownDelay)
 	})
+	// После g.Wait отложенные вызовы закрывают publisher, отправляют
+	// последние спаны и закрывают пул БД.
 	return g.Wait()
 }
 
-// serveHTTP держит srv до отмены ctx и затем корректно его останавливает.
-func serveHTTP(ctx context.Context, srv *http.Server) error {
+// serveHTTP держит srv до отмены ctx и затем корректно его останавливает:
+// /health начинает отвечать 503, через delay (пока ingress-nginx и kube-proxy
+// убирают под из маршрутизации, запросы ещё обслуживаются) сервер перестаёт
+// принимать соединения и ждёт завершения активных запросов.
+func serveHTTP(ctx context.Context, srv *http.Server, health *handlers.HealthHandler, delay time.Duration) error {
 	errCh := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -173,7 +186,10 @@ func serveHTTP(ctx context.Context, srv *http.Server) error {
 	case <-ctx.Done():
 	}
 
-	slog.Info("shutting down server")
+	health.Drain()
+	slog.Info("shutting down server", "delay", delay)
+	time.Sleep(delay)
+
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 

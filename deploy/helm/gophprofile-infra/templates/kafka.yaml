@@ -1,0 +1,147 @@
+{{- if eq .Values.broker.type "kafka" }}
+{{- $ctx := dict "ctx" $ "name" "kafka" "component" "kafka" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "infra.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "infra.componentLabels" $ctx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      # Пользователь appuser в образе apache/kafka — UID 1000.
+      securityContext:
+        {{- include "infra.podSecurityContext" (dict "uid" 1000 "gid" 1000) | nindent 8 }}
+      containers:
+        - name: kafka
+          image: {{ .Values.kafka.image }}
+          securityContext:
+            {{- include "infra.containerSecurityContext" . | nindent 12 }}
+          # KRaft, один узел: broker и controller в одном процессе. Контроллер
+          # слушает только localhost, клиенты подключаются к kafka:9092.
+          env:
+            - name: CLUSTER_ID
+              value: {{ .Values.kafka.clusterId | quote }}
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://127.0.0.1:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://kafka:9092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: PLAINTEXT
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@127.0.0.1:9093
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data/logs
+          ports:
+            - name: kafka
+              containerPort: 9092
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.kafka.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+      volumes:
+        {{- include "infra.dataVolume" . | nindent 8 }}
+  {{- include "infra.volumeClaimTemplates" (dict "ctx" $ "size" .Values.kafka.size) | nindent 2 }}
+{{- if .Values.kafka.exporter.enabled }}
+{{- $ectx := dict "ctx" $ "name" "kafka-exporter" "component" "kafka-exporter" }}
+---
+# Consumer lag и глубина DLQ (avatar-events.dlq) для дашбордов и алерта DLQNotEmpty.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  labels:
+    {{- include "infra.componentLabels" $ectx | nindent 4 }}
+spec:
+  selector:
+    {{- include "infra.selectorLabels" $ectx | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 9308
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  labels:
+    {{- include "infra.componentLabels" $ectx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" $ectx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "infra.componentLabels" $ectx | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "infra.podSecurityContext" (dict "uid" 65534 "gid" 65534) | nindent 8 }}
+      containers:
+        - name: kafka-exporter
+          image: {{ .Values.kafka.exporter.image }}
+          args: ["--kafka.server=kafka:9092"]
+          securityContext:
+            {{- include "infra.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: metrics
+              containerPort: 9308
+          readinessProbe:
+            tcpSocket:
+              port: metrics
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.kafka.exporter.resources | nindent 12 }}
+{{- end }}
+{{- end }}

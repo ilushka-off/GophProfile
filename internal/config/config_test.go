@@ -24,6 +24,7 @@ func setBaseEnv(t *testing.T) {
 		"HTTP_ADDR", "LOG_LEVEL", "MAX_UPLOAD_SIZE", "S3_REGION", "S3_USE_SSL",
 		"BROKER", "KAFKA_BROKERS", "RATE_LIMIT_RPS", "RATE_LIMIT_BURST", "CORS_ALLOWED_ORIGINS",
 		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG", "DEPLOYMENT_ENVIRONMENT", "METRICS_ADDR",
+		"MIGRATE_ON_START", "SHUTDOWN_DELAY",
 	} {
 		unsetEnv(t, k)
 	}
@@ -61,10 +62,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 
 	want := Config{
-		HTTPAddr:      defaultHTTPAddr,
-		LogLevel:      slog.LevelInfo,
-		DatabaseURI:   "postgres://u:p@localhost:5432/db",
-		MaxUploadSize: defaultMaxUploadSize,
+		HTTPAddr:       defaultHTTPAddr,
+		LogLevel:       slog.LevelInfo,
+		DatabaseURI:    "postgres://u:p@localhost:5432/db",
+		MaxUploadSize:  defaultMaxUploadSize,
+		MigrateOnStart: true,
+		ShutdownDelay:  defaultShutdownDelay,
 		S3: S3Config{
 			Endpoint:  "localhost:8333",
 			Region:    defaultS3Region,
@@ -101,6 +104,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0.25")
 	t.Setenv("DEPLOYMENT_ENVIRONMENT", "staging")
 	t.Setenv("METRICS_ADDR", ":9999")
+	t.Setenv("MIGRATE_ON_START", "false")
+	t.Setenv("SHUTDOWN_DELAY", "0s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -127,6 +132,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if want := []string{"https://app.example", "http://localhost:3000"}; !reflect.DeepEqual(cfg.CORSAllowedOrigins, want) {
 		t.Errorf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, want)
+	}
+	if cfg.MigrateOnStart {
+		t.Error("MigrateOnStart = true, want false")
+	}
+	if cfg.ShutdownDelay != 0 {
+		t.Errorf("ShutdownDelay = %v, want 0", cfg.ShutdownDelay)
 	}
 	if want := (ObservabilityConfig{TracesSampleRatio: 0.25, Environment: "staging", MetricsAddr: ":9999"}); cfg.Observability != want {
 		t.Errorf("Observability = %+v, want %+v", cfg.Observability, want)
@@ -156,6 +167,9 @@ func TestLoadErrors(t *testing.T) {
 		{name: "origin without scheme", env: map[string]string{"CORS_ALLOWED_ORIGINS": "app.example"}},
 		{name: "empty metrics addr", env: map[string]string{"METRICS_ADDR": ""}},
 		{name: "bad sampler arg", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "all"}},
+		{name: "bad migrate on start", env: map[string]string{"MIGRATE_ON_START": "sometimes"}},
+		{name: "bad shutdown delay", env: map[string]string{"SHUTDOWN_DELAY": "5"}},
+		{name: "negative shutdown delay", env: map[string]string{"SHUTDOWN_DELAY": "-1s"}},
 		{name: "sampler arg above one", env: map[string]string{"OTEL_TRACES_SAMPLER_ARG": "1.5"}},
 	}
 

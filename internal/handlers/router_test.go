@@ -24,6 +24,7 @@ func TestRouter(t *testing.T) {
 		wantBody   string
 	}{
 		{"health is routed", http.MethodGet, "/health", http.StatusOK, `"status":"ok"`},
+		{"livez is routed", http.MethodGet, "/livez", http.StatusOK, `{"status":"ok"}`},
 		{"unknown route is json 404", http.MethodGet, "/api/v1/nope", http.StatusNotFound, `{"error":"Not found"}`},
 		{"wrong method is json 405", http.MethodPost, "/health", http.StatusMethodNotAllowed, `{"error":"Method not allowed"}`},
 		{"upload is routed", http.MethodPost, "/api/v1/avatars", http.StatusBadRequest, detailsUserIDRequired},

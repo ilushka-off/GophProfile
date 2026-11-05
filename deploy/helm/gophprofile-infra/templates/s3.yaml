@@ -1,0 +1,101 @@
+{{- /*
+S3 для локального кластера — SeaweedFS (как в docker compose): master,
+volume, filer и S3-шлюз в одном процессе. Бакет создаёт server при старте
+(EnsureBucket). Метрики — на :9327.
+*/ -}}
+{{- $ctx := dict "ctx" $ "name" "seaweedfs" "component" "s3" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "infra.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: s3
+    - name: metrics
+      port: 9327
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: seaweedfs
+  labels:
+    {{- include "infra.componentLabels" $ctx | nindent 4 }}
+spec:
+  serviceName: seaweedfs
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "infra.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "infra.componentLabels" $ctx | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "infra.podSecurityContext" (dict "uid" 1000 "gid" 1000) | nindent 8 }}
+      containers:
+        - name: seaweedfs
+          image: {{ .Values.s3.image }}
+          securityContext:
+            {{- include "infra.containerSecurityContext" . | nindent 12 }}
+          command: ["weed"]
+          args:
+            - server
+            - -dir=/data
+            # Компоненты общаются друг с другом по IP пода.
+            - -ip=$(POD_IP)
+            - -ip.bind=0.0.0.0
+            - -s3
+            - -s3.port=8333
+            - -s3.config=/etc/seaweedfs/s3.json
+            - -metricsPort=9327
+            # Маленькие тома: в локальном кластере диск небольшой.
+            - -master.volumeSizeLimitMB=256
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: s3
+              containerPort: 8333
+            - name: metrics
+              containerPort: 9327
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: s3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.s3.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/seaweedfs
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "infra.secretName" . }}
+            items:
+              - key: s3.json
+                path: s3.json
+        {{- include "infra.dataVolume" . | nindent 8 }}
+  {{- include "infra.volumeClaimTemplates" (dict "ctx" $ "size" .Values.s3.size) | nindent 2 }}

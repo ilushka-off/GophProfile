@@ -1,0 +1,19 @@
+{{- /*
+Алерты этапа 2 (HighErrorRate, HighResponseTime, DLQNotEmpty, ServiceDown).
+Файл один на compose и Kubernetes: files/prometheus/alerts.yml, его тесты —
+make alerts-test. .Files.Get не шаблонизирует содержимое, поэтому
+{{ $labels.job }} в аннотациях доходит до Prometheus как есть.
+*/ -}}
+{{- if and (include "gophprofile.monitoringAvailable" .) .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-alerts
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/prometheus/alerts.yml" | nindent 2 }}
+{{- end }}

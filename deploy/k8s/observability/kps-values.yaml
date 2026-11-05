@@ -1,0 +1,92 @@
+# kube-prometheus-stack для локального кластера (релиз kps, namespace monitoring).
+# Prometheus находит ServiceMonitor и PrometheusRule с лейблом release=kps
+# (monitoring.serviceMonitor.labels в чарте gophprofile).
+
+# В k3s etcd, controller-manager, scheduler и kube-proxy не отдают метрики
+# на стандартных адресах: без этого их цели висят DOWN и шумят алертами.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    # exemplars: из графика длительности можно перейти к трейсу.
+    enableFeatures:
+      - exemplar-storage
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+
+grafana:
+  adminUser: admin
+  # Только для локального кластера.
+  adminPassword: admin
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+    analytics:
+      reporting_enabled: false
+    news:
+      news_feed_enabled: false
+  sidecar:
+    dashboards:
+      # ConfigMap с лейблом grafana_dashboard=1 из чарта gophprofile.
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      # uid prometheus — на него ссылаются дашборды этапа 2.
+      uid: prometheus
+      exemplarTraceIdDestinations:
+        datasourceUid: jaeger
+        traceIdLabelName: trace_id
+  # Loki и Jaeger — с теми же uid, что в docker compose: дашборды и переходы
+  # лог ↔ трейс работают без правок.
+  additionalDataSources:
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring:3100
+      editable: false
+      jsonData:
+        maxLines: 1000
+        derivedFields:
+          - name: trace_id
+            matcherRegex: '"trace_id":"(\w+)"'
+            datasourceUid: jaeger
+            url: "$${__value.raw}"
+            urlDisplayLabel: Трейс в Jaeger
+    - name: Jaeger
+      uid: jaeger
+      type: jaeger
+      access: proxy
+      url: http://jaeger-query.monitoring:16686
+      editable: false
+      jsonData:
+        nodeGraph:
+          enabled: true
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          customQuery: true
+          query: '{service=~"avatar-service|avatar-worker"} |= "$${__trace.traceId}"'

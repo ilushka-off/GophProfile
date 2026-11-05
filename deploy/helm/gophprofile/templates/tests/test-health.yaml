@@ -1,0 +1,48 @@
+{{- /*
+helm test: под с curl ходит в /health через Service и ждёт 200 (БД, S3
+и брокер доступны). Проходит Pod Security restricted, сетевой доступ —
+политика <fullname>-test.
+*/ -}}
+{{- $ctx := dict "ctx" $ "component" "test" }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-test-health
+  labels:
+    {{- include "gophprofile.componentLabels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: curl
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      args:
+        - --fail-with-body
+        - --silent
+        - --show-error
+        - --retry
+        - "5"
+        - --retry-all-errors
+        - --retry-delay
+        - "2"
+        - --max-time
+        - "5"
+        - http://{{ include "gophprofile.fullname" . }}-server:{{ .Values.server.service.port }}/health
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi

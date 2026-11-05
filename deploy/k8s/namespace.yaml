@@ -1,0 +1,13 @@
+# Namespace приложения и зависимостей. Pod Security Admission «restricted»
+# (замена PodSecurityPolicy, удалённой в Kubernetes 1.25): под без non-root,
+# seccomp RuntimeDefault и drop ALL кластер просто не запустит.
+# Создаётся до релизов: helm --create-namespace лейблы не ставит.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gophprofile
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

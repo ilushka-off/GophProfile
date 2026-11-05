@@ -1,0 +1,129 @@
+{{- /*
+Default deny в namespace создаёт чарт gophprofile. Здесь — разрешения для
+зависимостей: входящие только от server, worker и migrate (appSelector),
+метрики — от monitoring. Посторонний под в namespace до PostgreSQL не достучится.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $mon := $np.monitoringNamespace }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgresql
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "infra.selectorLabels" (dict "name" "postgresql" "component" "postgresql") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "infra.np.fromApp" (dict "ctx" $ "port" 5432) | nindent 4 }}
+  egress:
+    {{- include "infra.np.dnsEgress" $np.dns | nindent 4 }}
+---
+# SeaweedFS: S3 от приложения, метрики от monitoring; компоненты внутри
+# пода общаются по его IP — это трафик к самому себе.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "infra.selectorLabels" (dict "name" "seaweedfs" "component" "s3") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "infra.np.fromApp" (dict "ctx" $ "port" 8333) | nindent 4 }}
+    {{- include "infra.np.fromMonitoring" (dict "ns" $mon "port" 9327) | nindent 4 }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "seaweedfs" "component" "s3") | nindent 14 }}
+  egress:
+    {{- include "infra.np.dnsEgress" $np.dns | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "seaweedfs" "component" "s3") | nindent 14 }}
+{{- if eq .Values.broker.type "rabbitmq" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rabbitmq
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "infra.selectorLabels" (dict "name" "rabbitmq" "component" "rabbitmq") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "infra.np.fromApp" (dict "ctx" $ "port" 5672) | nindent 4 }}
+    {{- include "infra.np.fromMonitoring" (dict "ns" $mon "port" 15692) | nindent 4 }}
+  egress:
+    {{- include "infra.np.dnsEgress" $np.dns | nindent 4 }}
+{{- end }}
+{{- if eq .Values.broker.type "kafka" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "infra.selectorLabels" (dict "name" "kafka" "component" "kafka") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "infra.np.fromApp" (dict "ctx" $ "port" 9092) | nindent 4 }}
+    - from:
+        # kafka-exporter и сам брокер (обращается к себе по advertised-адресу kafka:9092).
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "kafka-exporter" "component" "kafka-exporter") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "kafka" "component" "kafka") | nindent 14 }}
+      ports:
+        - port: 9092
+          protocol: TCP
+  egress:
+    {{- include "infra.np.dnsEgress" $np.dns | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "kafka" "component" "kafka") | nindent 14 }}
+      ports:
+        - port: 9092
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-exporter
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "infra.selectorLabels" (dict "name" "kafka-exporter" "component" "kafka-exporter") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- include "infra.np.fromMonitoring" (dict "ns" $mon "port" 9308) | nindent 4 }}
+  egress:
+    {{- include "infra.np.dnsEgress" $np.dns | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "infra.selectorLabels" (dict "name" "kafka" "component" "kafka") | nindent 14 }}
+      ports:
+        - port: 9092
+          protocol: TCP
+{{- end }}
+{{- end }}

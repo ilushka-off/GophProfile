@@ -47,7 +47,8 @@ func TestServeMetrics(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- ServeMetrics(ctx, addr, NewRegistry()) }()
+	livez := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "alive") })
+	go func() { done <- ServeMetrics(ctx, addr, NewRegistry(), map[string]http.Handler{"/livez": livez}) }()
 
 	var body string
 	for range 50 {
@@ -62,6 +63,16 @@ func TestServeMetrics(t *testing.T) {
 	}
 	if !strings.Contains(body, "go_goroutines") {
 		t.Fatalf("metrics server did not answer: %q", body)
+	}
+
+	resp, err := http.Get("http://" + addr + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(b) != "alive" {
+		t.Errorf("GET /livez = %d %q, want 200 \"alive\"", resp.StatusCode, b)
 	}
 
 	cancel()
@@ -82,7 +93,7 @@ func TestServeMetricsBusyPort(t *testing.T) {
 	}
 	defer l.Close()
 
-	if err := ServeMetrics(context.Background(), l.Addr().String(), NewRegistry()); err == nil {
+	if err := ServeMetrics(context.Background(), l.Addr().String(), NewRegistry(), nil); err == nil {
 		t.Error("ServeMetrics() error = nil on a busy port")
 	}
 }

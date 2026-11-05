@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "GophProfile values",
+  "type": "object",
+  "required": ["broker", "config", "secret", "server", "worker", "ingress", "monitoring", "networkPolicy"],
+  "definitions": {
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": {
+          "type": "string",
+          "not": { "const": "latest" },
+          "description": "Версия или короткий git SHA; пусто — Chart.appVersion. latest запрещён: с ним helm upgrade не перезапускает поды."
+        },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "quantity": {
+      "type": ["string", "number"]
+    },
+    "memoryLimit": {
+      "type": "string",
+      "pattern": "^[0-9]+(Mi|Gi)$",
+      "description": "Лимит памяти в Mi или Gi: от него считается GOMEMLIMIT."
+    },
+    "resources": {
+      "type": "object",
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "$ref": "#/definitions/quantity" },
+            "memory": { "$ref": "#/definitions/quantity" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["cpu", "memory"],
+          "properties": {
+            "cpu": { "$ref": "#/definitions/quantity" },
+            "memory": { "$ref": "#/definitions/memoryLimit" }
+          }
+        }
+      }
+    },
+    "percent": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "autoscaling": {
+      "type": "object",
+      "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "targetCPUUtilizationPercentage": { "$ref": "#/definitions/percent" },
+        "targetMemoryUtilizationPercentage": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/percent" }]
+        }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "required": ["enabled", "minAvailable"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string"] }
+      }
+    },
+    "workerPdb": {
+      "type": "object",
+      "required": ["enabled", "maxUnavailable"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxUnavailable": { "type": ["integer", "string"] }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "required": ["path", "periodSeconds", "failureThreshold"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/" },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "required": ["startup", "liveness", "readiness"],
+      "properties": {
+        "startup": { "$ref": "#/definitions/probe" },
+        "liveness": { "$ref": "#/definitions/probe" },
+        "readiness": { "$ref": "#/definitions/probe" }
+      }
+    },
+    "egressRule": {
+      "type": "object",
+      "required": ["port", "to"],
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "to": { "type": "array", "minItems": 1, "items": { "type": "object" } }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["image", "resources", "autoscaling", "pdb", "probes", "terminationGracePeriodSeconds"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "replicaCount": { "type": "integer", "minimum": 0 },
+        "resources": { "$ref": "#/definitions/resources" },
+        "autoscaling": { "$ref": "#/definitions/autoscaling" },
+        "probes": { "$ref": "#/definitions/probes" },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 1 },
+        "extraEnv": { "type": "array" }
+      }
+    }
+  },
+  "properties": {
+    "broker": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["rabbitmq", "kafka"] }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["logLevel", "maxUploadSize", "s3", "otel"],
+      "properties": {
+        "logLevel": { "enum": ["debug", "info", "warn", "error", "DEBUG", "INFO", "WARN", "ERROR"] },
+        "maxUploadSize": { "type": "integer", "minimum": 1 },
+        "environment": { "type": "string" },
+        "s3": {
+          "type": "object",
+          "required": ["endpoint", "bucket"],
+          "properties": {
+            "endpoint": { "type": "string" },
+            "bucket": { "type": "string", "minLength": 3 },
+            "region": { "type": "string" },
+            "useSSL": { "type": "boolean" }
+          }
+        },
+        "kafkaBrokers": { "type": "string" },
+        "otel": {
+          "type": "object",
+          "properties": {
+            "endpoint": { "type": "string" },
+            "samplerArg": {
+              "type": ["string", "number"],
+              "pattern": "^(0(\\.[0-9]+)?|1(\\.0+)?)$",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        },
+        "rateLimit": {
+          "type": "object",
+          "properties": {
+            "rps": { "type": "number", "minimum": 0 },
+            "burst": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "corsAllowedOrigins": { "type": "string" }
+      }
+    },
+    "secret": {
+      "type": "object",
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "values": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "propertyNames": { "enum": ["DATABASE_URI", "S3_ACCESS_KEY", "S3_SECRET_KEY", "RABBITMQ_URL"] }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "server": {
+      "allOf": [
+        { "$ref": "#/definitions/component" },
+        {
+          "type": "object",
+          "required": ["service", "shutdownDelay"],
+          "properties": {
+            "pdb": { "$ref": "#/definitions/pdb" },
+            "shutdownDelay": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$" },
+            "service": {
+              "type": "object",
+              "required": ["port"],
+              "properties": {
+                "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "worker": {
+      "allOf": [
+        { "$ref": "#/definitions/component" },
+        {
+          "type": "object",
+          "properties": {
+            "pdb": { "$ref": "#/definitions/workerPdb" }
+          }
+        }
+      ]
+    },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": ["enabled", "className", "host"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "proxyBodySize": { "type": "string", "pattern": "^[0-9]+[kKmMgG]?$" },
+        "annotations": { "type": "object" },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": { "type": "string" },
+            "clusterIssuer": { "type": "string" }
+          }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "serviceMonitor": { "type": "object" },
+        "prometheusRule": { "type": "object" },
+        "dashboards": { "type": "object" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressControllerNamespace": { "type": "string" },
+        "monitoringNamespace": { "type": "string" },
+        "probeSources": { "type": "array", "items": { "type": "object" } },
+        "dns": {
+          "type": "object",
+          "required": ["namespace", "podLabels"],
+          "properties": {
+            "namespace": { "type": "string" },
+            "podLabels": { "type": "object" }
+          }
+        },
+        "egress": {
+          "type": "object",
+          "required": ["postgresql", "s3", "rabbitmq", "kafka", "otlp"],
+          "properties": {
+            "postgresql": { "$ref": "#/definitions/egressRule" },
+            "s3": { "$ref": "#/definitions/egressRule" },
+            "rabbitmq": { "$ref": "#/definitions/egressRule" },
+            "kafka": { "$ref": "#/definitions/egressRule" },
+            "otlp": { "$ref": "#/definitions/egressRule" }
+          }
+        }
+      }
+    }
+  }
+}

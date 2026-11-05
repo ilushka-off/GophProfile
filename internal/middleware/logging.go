@@ -3,6 +3,7 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,7 +12,9 @@ import (
 
 // Logger логирует каждый запрос: метод, маршрут, путь, статус и длительность.
 // Маршрут берётся из chi после обработки — до неё RoutePattern ещё не заполнен.
-func Logger(log *slog.Logger) func(http.Handler) http.Handler {
+// Успешные запросы к путям из quiet (пробы kubelet и healthcheck) пишутся на
+// уровне debug, чтобы не забивать логи запросом каждые несколько секунд.
+func Logger(log *slog.Logger, quiet ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -25,7 +28,11 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 				status = http.StatusOK
 			}
 
-			log.InfoContext(r.Context(), "http request",
+			level := slog.LevelInfo
+			if status < http.StatusBadRequest && slices.Contains(quiet, r.URL.Path) {
+				level = slog.LevelDebug
+			}
+			log.Log(r.Context(), level, "http request",
 				"request_id", chimw.GetReqID(r.Context()),
 				"method", r.Method,
 				"route", routePattern(r),

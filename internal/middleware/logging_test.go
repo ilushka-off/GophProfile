@@ -75,3 +75,37 @@ func TestLoggerLogsRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestLoggerQuietPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		status    int
+		wantLevel string
+	}{
+		{name: "successful probe is debug", path: "/health", status: http.StatusOK, wantLevel: "DEBUG"},
+		{name: "failed probe stays info", path: "/health", status: http.StatusServiceUnavailable, wantLevel: "INFO"},
+		{name: "other path stays info", path: "/api/v1/avatars", status: http.StatusOK, wantLevel: "INFO"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			r := chi.NewRouter()
+			r.Use(Logger(logger, "/health"))
+			r.Get(tt.path, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tt.status) })
+
+			r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil))
+
+			var entry map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
+				t.Fatalf("log is not JSON: %v (%q)", err, buf.String())
+			}
+			if entry["level"] != tt.wantLevel {
+				t.Errorf("level = %v, want %s", entry["level"], tt.wantLevel)
+			}
+		})
+	}
+}
